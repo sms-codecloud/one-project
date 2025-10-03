@@ -1,0 +1,5 @@
+region        = "ap-south-1"
+key_name      = "your-ec2-keypair"
+my_ip_cidr    = "YOUR.IP.ADDR.XXX/32"
+sa_password   = "ChangeMe123!Stronger"
+github_repo_url = "https://github.com/yourname/yourrepo.git"
