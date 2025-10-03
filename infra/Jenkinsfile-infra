@@ -4,14 +4,14 @@ pipeline {
 
   parameters {
     choice(name: 'TF_ACTION', choices: ['APPLY','DESTROY'], description: 'Terraform action')
-    // Comma-separated Secret Text credential IDs; each secret VALUE is a CIDR like 49.207.145.12/32
+    // Comma-separated Secret Text credential IDs; each secret VALUE must be a CIDR like 49.207.145.12/32
     string(name: 'CIDR_CRED_IDS', defaultValue: 'shankar_ip_cidr', description: 'Comma-separated Secret Text credential IDs')
   }
 
   environment {
     TF_IN_AUTOMATION = 'true'
-    TF_DIR = 'infra'
-    PATH = "C:\\binaries\\terraform;${env.PATH}"   // terraform.exe in PATH
+    TF_DIR           = 'infra'
+    PATH             = "C:\\binaries\\terraform;${env.PATH}" // ensure terraform.exe in PATH
   }
 
   stages {
@@ -33,47 +33,50 @@ pipeline {
     }
 
     stage('Bind CIDR Secrets -> JSON (sandbox-safe)') {
-        steps {
-            script {
-                def raw = params.CIDR_CRED_IDS.tokenize(',')
-                def ids = []
-                for (r in raw) { def t = r.trim(); if (t) ids.add(t) }
-                if (ids.isEmpty()) { error 'No CIDR credential IDs provided.' }
+      steps {
+        script {
+          // Parse credential IDs (no spread operator; CPS-safe)
+          def raw = params.CIDR_CRED_IDS.tokenize(',')
+          def ids = []
+          for (r in raw) { def t = r.trim(); if (t) ids.add(t) }
+          if (ids.isEmpty()) { error 'No CIDR credential IDs provided.' }
 
-                def bindings = []
-                int i = 0
-                for (id in ids) { bindings.add([$class:'StringBinding', credentialsId:id, variable:"CIDR_${i}"]); i++ }
-                bindings.add([$class:'StringBinding', credentialsId:'sql_sa_password', variable:'SQL_SA_PASSWORD'])
+          // Build dynamic credential bindings for CIDRs + SQL password
+          def bindings = []
+          int i = 0
+          for (id in ids) { bindings.add([$class:'StringBinding', credentialsId:id,                variable:"CIDR_${i}"]); i++ }
+          bindings.add([$class:'StringBinding',    credentialsId:'sql_sa_password', variable:'SQL_SA_PASSWORD'])
 
-                withCredentials(bindings) {
-                    // Build JSON list of CIDRs in PowerShell
-                    def cidrJson = powershell(returnStdout: true, script: '''
-                    $ErrorActionPreference = "Stop"
-                    $cidrs = @()
-                    $i = 0
-                    while ($true) {
-                        $name = "CIDR_$i"
-                        $val  = [Environment]::GetEnvironmentVariable($name)
-                        if ([string]::IsNullOrWhiteSpace($val)) { break }
-                        $val = $val.Trim()
-                        if (-not ($val -match "^\\d{1,3}(\\.\\d{1,3}){3}/(?:3[0-2]|[12]?\\d)$")) {
-                        throw ("Invalid CIDR in {0}: {1} (expected like 203.0.113.10/32)" -f $name, $val)
-                        }
-                        $cidrs += $val
-                        $i++
-                    }
-                    if ($cidrs.Count -eq 0) { throw "No CIDRs found in bound credentials." }
-                    ($cidrs | ConvertTo-Json -Compress)
-                    ''').trim()
-
-                    // Save for the next stage; DO NOT set TF_VAR for the list (Windows quoting is fickle)
-                    env.ALLOWED_CIDRS_JSON   = cidrJson
-                    env.TF_VAR_sql_sa_password = env.SQL_SA_PASSWORD
-
-                    echo "Prepared ${ids.size()} SSH CIDR(s)."
+          withCredentials(bindings) {
+            // Build JSON list of CIDRs entirely in PowerShell (no sandboxed Groovy env access)
+            def cidrJson = powershell(returnStdout: true, script: '''
+              $ErrorActionPreference = "Stop"
+              $cidrs = @()
+              $i = 0
+              while ($true) {
+                $name = "CIDR_$i"
+                $val  = [Environment]::GetEnvironmentVariable($name)
+                if ([string]::IsNullOrWhiteSpace($val)) { break }
+                $val = $val.Trim()
+                if (-not ($val -match "^\\d{1,3}(\\.\\d{1,3}){3}/(?:3[0-2]|[12]?\\d)$")) {
+                  throw ("Invalid CIDR in {0}: {1} (expected like 203.0.113.10/32)" -f $name, $val)
                 }
-            }
+                $cidrs += $val
+                $i++
+              }
+              if ($cidrs.Count -eq 0) { throw "No CIDRs found in bound credentials." }
+              ($cidrs | ConvertTo-Json -Compress)
+            ''').trim()
+
+            // Save for the next stage; DO NOT export list as TF_VAR (Windows quoting pain)
+            env.ALLOWED_CIDRS_JSON     = cidrJson
+            // Export only the secret password as TF_VAR so TF consumes it directly
+            env.TF_VAR_sql_sa_password = env.SQL_SA_PASSWORD
+
+            echo "Prepared ${ids.size()} SSH CIDR(s)."
+          }
         }
+      }
     }
 
     stage('Sanity (no stray tfvars)') {
@@ -83,43 +86,42 @@ pipeline {
             $ErrorActionPreference = "Stop"
             Write-Host "Auto-loaded tfvars (should be none):"
             Get-ChildItem -Force -Name *.tfvars,*.auto.tfvars,*.tfvars.json,*.auto.tfvars.json -ErrorAction SilentlyContinue | % { "  - $_" }
-            if (-not $env:TF_VAR_allowed_ssh_cidrs) { throw "TF_VAR_allowed_ssh_cidrs not set"; }
-            if (-not $env:TF_VAR_sql_sa_password)   { throw "TF_VAR_sql_sa_password not set"; }
+            if (-not $env:ALLOWED_CIDRS_JSON)   { throw "ALLOWED_CIDRS_JSON not set"; }
+            if (-not $env:TF_VAR_sql_sa_password) { throw "TF_VAR_sql_sa_password not set"; }
           '''
         }
       }
     }
 
     stage('Terraform Init & Run') {
-        steps {
-            withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws_secrets_shankar']]) {
-            dir("${env.WORKSPACE}\\${env.TF_DIR}") {
-                // Write a temp auto tfvars JSON with ONLY the public CIDRs (safe to write)
-                powershell '''
-                $ErrorActionPreference = "Stop"
-                if (-not $env:ALLOWED_CIDRS_JSON) { throw "ALLOWED_CIDRS_JSON not set" }
-                $content = '{ "allowed_ssh_cidrs": ' + $env:ALLOWED_CIDRS_JSON + ' }'
-                Set-Content -LiteralPath cidrs.auto.tfvars.json -Value $content -Encoding UTF8
-                Write-Host "Wrote cidrs.auto.tfvars.json with allowed_ssh_cidrs."
-                '''
+      steps {
+        withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws_secrets_shankar']]) {
+          dir("${env.WORKSPACE}\\${env.TF_DIR}") {
+            // Write the non-secret list to an auto tfvars json that Terraform will auto-load
+            powershell '''
+              $ErrorActionPreference = "Stop"
+              $content = '{ "allowed_ssh_cidrs": ' + $env:ALLOWED_CIDRS_JSON + ' }'
+              Set-Content -LiteralPath cidrs.auto.tfvars.json -Value $content -Encoding UTF8
+              Write-Host "Wrote cidrs.auto.tfvars.json with allowed_ssh_cidrs."
+            '''
 
-                powershell '''
-                $ErrorActionPreference = "Stop"
-                terraform init -reconfigure -upgrade -no-color -input=false
+            powershell '''
+              $ErrorActionPreference = "Stop"
+              terraform init -reconfigure -upgrade -no-color -input=false
 
-                if ($env:TF_ACTION -eq "DESTROY") {
-                    terraform plan  -destroy -out=tfplan -no-color -input=false
-                    terraform apply -no-color -input=false -auto-approve tfplan
-                } else {
-                    terraform plan  -out=tfplan -no-color -input=false
-                    terraform apply -no-color -input=false -auto-approve tfplan
-                    terraform output
-                    terraform output -no-color -json | Out-File -FilePath tf-outputs.json -Encoding utf8
-                }
-                '''
-            }
-            }
+              if ($env:TF_ACTION -eq "DESTROY") {
+                terraform plan  -destroy -out=tfplan -no-color -input=false
+                terraform apply -no-color -input=false -auto-approve tfplan
+              } else {
+                terraform plan  -out=tfplan -no-color -input=false
+                terraform apply -no-color -input=false -auto-approve tfplan
+                terraform output
+                terraform output -no-color -json | Out-File -FilePath tf-outputs.json -Encoding utf8
+              }
+            '''
+          }
         }
+      }
     }
   }
 
