@@ -11,7 +11,7 @@ pipeline {
 
 parameters {
   choice(name: 'TF_ACTION', choices: ['APPLY','DESTROY'], description: 'Terraform action')
-  string(name: 'MY_IP_CIDR', defaultValue: 'x.x.x.x/32', description: 'Your IP in CIDR, e.g. 49.207.145.12/32')
+  string(name: 'MY_IP_CIDR', defaultValue: 'xx.xx.xxx.xx/32', description: 'Your public IP in CIDR')
 }
 
   stages {
@@ -55,8 +55,8 @@ parameters {
                 ]) {
                     // Export TF_VAR_* so Terraform picks them up automatically
                     withEnv([
-                         "TF_VAR_sql_sa_password=${env.SQL_SA_PASSWORD}",
-                        "TF_VAR_my_ip_cidr=${env.MY_IP_CIDR}"
+                        "TF_VAR_my_ip_cidr=${params.MY_IP_CIDR}",
+                        "TF_VAR_sql_sa_password=${env.SQL_SA_PASSWORD}"
                     ]) {
                     dir("${env.WORKSPACE}\\${env.TF_DIR}") {
                     powershell '''
