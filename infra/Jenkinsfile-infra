@@ -1,10 +1,13 @@
 pipeline {
   agent { label 'win-dev' }
-  options { disableConcurrentBuilds() }
-  environment { 
+  options { disableConcurrentBuilds(); timestamps(); ansiColor('xterm') }
+
+  environment {
     TF_IN_AUTOMATION = "true"
-    TF_DIR = 'infra'
-    }
+    TF_DIR = 'infra' // matches your repo structure
+    // put terraform.exe into PATH for this run
+    PATH = "C:\\binaries\\terraform;${env.PATH}"
+  }
 
   parameters {
     choice(
@@ -17,52 +20,51 @@ pipeline {
   stages {
     stage('Tool Versions') {
       steps {
-        withEnv(["PATH=C:\\binaries\\terraform;${env.PATH}"]) {
-          bat 'git --version'
-          bat 'dotnet --version'
-          bat 'terraform --version'
-          bat 'node --version'
-        }
-        bat 'dir /s /b *.csproj'
+        bat 'git --version'
+        bat 'dotnet --version'
+        bat 'terraform --version'
+        bat 'node --version'
       }
     }
 
     stage('Checkout Repo') {
       steps {
         cleanWs()
-        bat 'git --version'
-        dir("${env.WORKSPACE}\\arj-infra") {
-          bat 'git clone -b main https://github.com/sms-codecloud/one-project.git .'
-        }
+        // If this job is configured as “Pipeline script from SCM”, this pulls your repo
+        checkout scm
+        // Quick sanity: list .csproj
+        bat 'dir /s /b *.csproj || ver >NUL'
       }
     }
 
     stage('Terraform Init & Run') {
-    steps {
-      withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws_secrets_shankar']]) {
-        withEnv(["PATH=C:\\binaries\\terraform;${env.PATH}"]) {
-          dir("${env.WORKSPACE}\\one-project\\infra") {
+      steps {
+        withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws_secrets_shankar']]) {
+          dir("${env.WORKSPACE}\\${env.TF_DIR}") {
+            // Use PowerShell for nicer logic, and fix init syntax
             powershell '''
               $ErrorActionPreference = "Stop"
-
               Write-Host "Selected action: $env:TF_ACTION"
-              terraform version
 
-              # Init (add -upgrade/-reconfigure if you want)
-              terraform -reconfigure -upgrade init -no-color
+              terraform version
+              # Correct syntax: subcommand first, then flags
+              terraform init -reconfigure -upgrade -no-color -input=false
 
               switch ($env:TF_ACTION) {
                 'DESTROY' {
-                  Write-Host "Running plan (destroy)..."
-                  terraform plan -destroy -no-color -input=false
+                  Write-Host "Planning destroy..."
+                  terraform plan    -destroy -out=tfplan -no-color -input=false
                   Write-Host "Destroying..."
-                  terraform destroy -no-color -input=false -auto-approve
+                  terraform apply   -auto-approve tfplan -no-color -input=false
                 }
                 'APPLY' {
-                  Write-Host "Running plan (apply)..."
-                  terraform plan -no-color -input=false
+                  Write-Host "Planning apply..."
+                  terraform plan    -out=tfplan -no-color -input=false
                   Write-Host "Applying..."
-                  terraform apply -no-color -input=false -auto-approve
+                  terraform apply   -auto-approve tfplan -no-color -input=false
+                  Write-Host "Outputs:"
+                  terraform output
+                  terraform output -json | Out-File -FilePath tf-outputs.json -Encoding utf8
                 }
                 default {
                   throw "Unsupported TF_ACTION: '$($env:TF_ACTION)'. Expected 'APPLY' or 'DESTROY'."
@@ -73,13 +75,12 @@ pipeline {
         }
       }
     }
-}
-
   }
 
   post {
     always {
-      echo 'Cleaning up workspace...'
+      // keep plan & outputs for audit/debug
+      archiveArtifacts artifacts: "${TF_DIR}\\tfplan, ${TF_DIR}\\tf-outputs.json", allowEmptyArchive: true
       cleanWs()
     }
   }
