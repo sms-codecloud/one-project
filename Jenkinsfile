@@ -1,5 +1,5 @@
 pipeline {
-  agent { label 'dev-win' }   // your Windows agent
+  agent { label 'win-dev' }   // your Windows agent
 
   options { timestamps() /* add ansiColor('xterm') if plugin installed */ }
   triggers { githubPush() }   // or: pollSCM('H/2 * * * *')
