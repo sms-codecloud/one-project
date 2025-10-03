@@ -6,7 +6,7 @@ pipeline {
     choice(name: 'TF_ACTION', choices: ['APPLY','DESTROY'], description: 'Terraform action')
     string(
       name: 'CIDR_CRED_IDS',
-      defaultValue: 'shankar_ip_cidr,mahantesh_ip_cidr,sharanu_ip_cidr',
+      defaultValue: 'shankar_ip_cidr',
       description: 'Comma-separated Secret Text credential IDs; each secret value is a CIDR like 49.207.145.12/32'
     )
   }
