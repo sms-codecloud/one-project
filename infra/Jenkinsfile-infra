@@ -10,7 +10,7 @@ pipeline {
     choice(
       name: 'TF_ACTION',
       choices: ['APPLY', 'DESTROY'],
-      description: 'Choose whether to create or destroy EC2 instances.'
+      description: 'Choose whether to create or destroy project infrastructure.'
     )
   }
 
