@@ -4,17 +4,14 @@ pipeline {
 
   parameters {
     choice(name: 'TF_ACTION', choices: ['APPLY','DESTROY'], description: 'Terraform action')
-    string(
-      name: 'CIDR_CRED_IDS',
-      defaultValue: 'shankar_ip_cidr',
-      description: 'Comma-separated Secret Text credential IDs; each secret value is a CIDR like 49.207.145.12/32'
-    )
+    // Comma-separated Secret Text credential IDs; each secret VALUE is a CIDR like 49.207.145.12/32
+    string(name: 'CIDR_CRED_IDS', defaultValue: 'shankar_ip_cidr', description: 'Comma-separated Secret Text credential IDs')
   }
 
   environment {
     TF_IN_AUTOMATION = 'true'
-    TF_DIR           = 'infra'
-    PATH             = "C:\\binaries\\terraform;${env.PATH}" // terraform.exe in PATH
+    TF_DIR = 'infra'
+    PATH = "C:\\binaries\\terraform;${env.PATH}"   // terraform.exe in PATH
   }
 
   stages {
@@ -35,48 +32,47 @@ pipeline {
       }
     }
 
-    stage('Bind CIDR Secrets -> TF_VARs') {
+    stage('Bind CIDR Secrets -> TF_VARs (sandbox-safe)') {
       steps {
         script {
-          // Parse credential IDs (no spread operator)
+          // Parse list of Secret Text IDs (no spread operator)
           def raw = params.CIDR_CRED_IDS.tokenize(',')
           def ids = []
           for (r in raw) { def t = r.trim(); if (t) ids.add(t) }
           if (ids.isEmpty()) { error 'No CIDR credential IDs provided.' }
 
-          // Build dynamic bindings for CIDRs + SA password
+          // Build dynamic credential bindings; also bind SQL SA password
           def bindings = []
           int i = 0
-          for (id in ids) {
-            bindings.add([$class: 'StringBinding', credentialsId: id, variable: "CIDR_${i}"])
-            i++
-          }
-          bindings.add([$class: 'StringBinding', credentialsId: 'sql_sa_password', variable: 'SQL_SA_PASSWORD'])
+          for (id in ids) { bindings.add([$class:'StringBinding', credentialsId:id, variable:"CIDR_${i}"]); i++ }
+          bindings.add([$class:'StringBinding', credentialsId:'sql_sa_password', variable:'SQL_SA_PASSWORD'])
 
           withCredentials(bindings) {
-            // Collect CIDRs using sandbox-safe env.get(...)
-            def cidrs = []
-            for (int j = 0; j < ids.size(); j++) {
-              def v = (env.get("CIDR_${j}") ?: '').trim()
-              if (!v) { error "Credential '${ids[j]}' is empty." }
-              // light sanity; Terraform also validates with cidrnetmask()
-              if (!v.contains('/')) { error "Credential '${ids[j]}' value '${v}' is not CIDR (missing /)." }
-              cidrs.add(v)
-            }
+            // Build JSON list of CIDRs entirely in PowerShell (sandbox-safe)
+            def cidrJson = powershell(returnStdout: true, script: '''
+              $ErrorActionPreference = "Stop"
+              $cidrs = @()
+              $i = 0
+              while ($true) {
+                $name = "CIDR_$i"
+                $val  = [Environment]::GetEnvironmentVariable($name)
+                if ([string]::IsNullOrWhiteSpace($val)) { break }
+                $val = $val.Trim()
+                if (-not ($val -match "^\\d{1,3}(\\.\\d{1,3}){3}\\/(?:3[0-2]|[12]?\\d)$")) {
+                  throw "Invalid CIDR in $name: $val (expected like 203.0.113.10/32)"
+                }
+                $cidrs += $val
+                $i++
+              }
+              if ($cidrs.Count -eq 0) { throw "No CIDRs found in bound credentials." }
+              $json = "[" + ($cidrs | ForEach-Object { '"' + $_ + '"' } -join ",") + "]"
+              Write-Output $json
+            ''').trim()
 
-            // Build JSON list without JsonBuilder (sandbox-safe)
-            def sb = new StringBuilder('[')
-            for (int k = 0; k < cidrs.size(); k++) {
-              if (k > 0) sb.append(',')
-              sb.append('"').append(cidrs[k]).append('"')
-            }
-            sb.append(']')
+            env.TF_VAR_allowed_ssh_cidrs = cidrJson
+            env.TF_VAR_sql_sa_password   = env.SQL_SA_PASSWORD
 
-            // Export as TF_VAR_* for Terraform
-            env.TF_VAR_allowed_ssh_cidrs = sb.toString()
-            env.TF_VAR_sql_sa_password   = env.get('SQL_SA_PASSWORD')
-
-            echo "Loaded ${cidrs.size()} SSH CIDR(s) for allow-list."
+            echo "Loaded ${ids.size()} SSH CIDR(s) for allow-list."
           }
         }
       }
@@ -88,7 +84,7 @@ pipeline {
           powershell '''
             $ErrorActionPreference = "Stop"
             Write-Host "Auto-loaded tfvars (should be none):"
-            Get-ChildItem -Force -Name *.tfvars,*.auto.tfvars,*.tfvars.json,*.auto.tfvars.json -ErrorAction SilentlyContinue | ForEach-Object { "  - $_" }
+            Get-ChildItem -Force -Name *.tfvars,*.auto.tfvars,*.tfvars.json,*.auto.tfvars.json -ErrorAction SilentlyContinue | % { "  - $_" }
             if (-not $env:TF_VAR_allowed_ssh_cidrs) { throw "TF_VAR_allowed_ssh_cidrs not set"; }
             if (-not $env:TF_VAR_sql_sa_password)   { throw "TF_VAR_sql_sa_password not set"; }
           '''
