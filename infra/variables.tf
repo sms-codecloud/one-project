@@ -21,7 +21,7 @@ variable "allowed_ssh_cidrs" {
   }
 }
 
-variable "sql_sa_password" { 
-    type = string  
-    sensitive = true 
+variable "sql_sa_password" {
+  type      = string
+  sensitive = true
 }      
