@@ -1,117 +1,114 @@
 pipeline {
   agent { label 'win-dev' }
-  options { disableConcurrentBuilds(); timestamps(); ansiColor('xterm') }
+  options { disableConcurrentBuilds(); timestamps() }
+
+  parameters {
+    choice(name: 'TF_ACTION', choices: ['APPLY','DESTROY'], description: 'Terraform action')
+    // Comma-separated Secret Text credential IDs. Each secret’s VALUE must be a CIDR like 49.207.145.12/32
+    string(name: 'CIDR_CRED_IDS', defaultValue: 'shankar_ip_cidr,mahantesh_ip_cidr,sharanu_ip_cidr', description: 'Comma-separated Jenkins Secret Text credential IDs that each contain one CIDR.')
+  }
 
   environment {
     TF_IN_AUTOMATION = "true"
-    TF_DIR = 'infra' // matches your repo structure
-    // put terraform.exe into PATH for this run
-    PATH = "C:\\binaries\\terraform;${env.PATH}"
+    TF_DIR = 'infra'
+    PATH = "C:\\binaries\\terraform;${env.PATH}"  // ensure terraform.exe in PATH
   }
-
-parameters {
-  choice(name: 'TF_ACTION', choices: ['APPLY','DESTROY'], description: 'Terraform action')
-}
 
   stages {
     stage('Tool Versions') {
       steps {
         bat 'git --version'
-        bat 'dotnet --version'
         bat 'terraform --version'
         bat 'node --version'
+        bat 'dotnet --version'
       }
     }
 
     stage('Checkout Repo') {
       steps {
         cleanWs()
-        // If this job is configured as “Pipeline script from SCM”, this pulls your repo
         checkout scm
-        // Quick sanity: list .csproj
         bat 'dir /s /b *.csproj || ver >NUL'
       }
     }
 
-    stage('Sanity') {
-        steps {
-            dir("${env.WORKSPACE}\\${env.TF_DIR}") {
-            powershell '''
-                Write-Host "Auto-loaded tfvars files present (should be none):"
-                Get-ChildItem -Force -Name *.tfvars,*.auto.tfvars,*.tfvars.json,*.auto.tfvars.json -ErrorAction SilentlyContinue | % { "  - $_" }
-                Write-Host "`nTF_VAR_* env vars currently set:"
-                Get-ChildItem Env: | ? { $_.Name -like "TF_VAR_*" } | % { "  $($_.Name)=<hidden>" }
-            '''
+    stage('Bind CIDR Secrets -> TF_VARs') {
+      steps {
+        script {
+          // Build a dynamic credential binding list for the provided secret IDs
+          def ids = params.CIDR_CRED_IDS.split(',')*.trim().findAll { it }
+          if (ids.isEmpty()) { error "No CIDR credential IDs provided." }
+
+          def bindings = []
+          ids.eachWithIndex { id, i ->
+            bindings << [$class: 'StringBinding', credentialsId: id, variable: "CIDR_${i}"]
+          }
+          // Also bind the SQL SA password
+          bindings << [$class: 'StringBinding', credentialsId: 'sql_sa_password', variable: 'SQL_SA_PASSWORD']
+
+          withCredentials(bindings) {
+            def cidrs = []
+            ids.eachWithIndex { id, i ->
+              def v = (env["CIDR_${i}"] ?: '').trim()
+              if (!v) { error "Credential '${id}' is empty." }
+              // simple IPv4 CIDR regex; Terraform will further validate
+              if (!(v ==~ /(?:\d{1,3}\.){3}\d{1,3}\/(?:3[0-2]|[12]?\d)/)) {
+                error "Credential '${id}' value '${v}' is not a valid CIDR (e.g. 203.0.113.10/32)."
+              }
+              cidrs << v
             }
+
+            // Export to Terraform as a JSON list(string)
+            env.TF_VAR_allowed_ssh_cidrs = new groovy.json.JsonBuilder(cidrs).toString()
+            // Export SQL password
+            env.TF_VAR_sql_sa_password   = env.SQL_SA_PASSWORD
+
+            echo "Loaded ${cidrs.size()} SSH CIDR(s) for allow-list."
+          }
         }
+      }
+    }
+
+    stage('Sanity (no stray tfvars)') {
+      steps {
+        dir("${env.WORKSPACE}\\${env.TF_DIR}") {
+          powershell '''
+            $ErrorActionPreference = "Stop"
+            Write-Host "Auto-loaded tfvars files present (should be none):"
+            Get-ChildItem -Force -Name *.tfvars,*.auto.tfvars,*.tfvars.json,*.auto.tfvars.json -ErrorAction SilentlyContinue | ForEach-Object { "  - $_" }
+            if (-not $env:TF_VAR_allowed_ssh_cidrs) { throw "TF_VAR_allowed_ssh_cidrs not set"; }
+            if (-not $env:TF_VAR_sql_sa_password)   { throw "TF_VAR_sql_sa_password not set"; }
+          '''
+        }
+      }
     }
 
     stage('Terraform Init & Run') {
-        steps {
-            withCredentials([
-                 [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws_secrets_shankar'],
-                string(credentialsId: 'sql_sa_password', variable: 'SQL_SA_PASSWORD')
-                ]) {
-                    // Auto-detect public IPv4 and export TF_VARs for Terraform
-                    powershell '''
-                        $ErrorActionPreference = "Stop"
-                        $services = @("https://api.ipify.org","https://ipv4.icanhazip.com","https://ifconfig.me/ip")
-                        $ip = $null
-                        foreach ($u in $services) {
-                            try {
-                            $r = (Invoke-RestMethod -Uri $u -TimeoutSec 5).Trim()
-                            if ($r -match "^\\d{1,3}(\\.\\d{1,3}){3}$") { $ip = $r; break }
-                            } catch {}
-                        }
-                        if (-not $ip) { throw "Could not determine public IPv4 for my_ip_cidr" }
-                        $env:TF_VAR_my_ip_cidr = "$ip/32"
-                        $env:TF_VAR_sql_sa_password = $env:SQL_SA_PASSWORD
-                        Write-Host "Using TF_VAR_my_ip_cidr = $env:TF_VAR_my_ip_cidr"
-                    '''
-                    withEnv([
-                        "TF_VAR_my_ip_cidr=${params.MY_IP_CIDR}",
-                        "TF_VAR_sql_sa_password=${env.SQL_SA_PASSWORD}"
-                    ]) {
-                    dir("${env.WORKSPACE}\\${env.TF_DIR}") {
-                    powershell '''
-                        $ErrorActionPreference = "Stop"
-                        Write-Host "Selected action: $env:TF_ACTION"
+      steps {
+        withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws_secrets_shankar']]) {
+          dir("${env.WORKSPACE}\\${env.TF_DIR}") {
+            powershell '''
+              $ErrorActionPreference = "Stop"
+              terraform init -reconfigure -upgrade -no-color -input=false
 
-                        terraform version
-                        terraform init -reconfigure -upgrade -no-color -input=false
-
-                        switch ($env:TF_ACTION) {
-                        'DESTROY' {
-                            Write-Host "Planning destroy..."
-                            terraform plan   -destroy -out=tfplan -no-color -input=false
-                            Write-Host "Destroying..."
-                            terraform destroy -no-color -input=false -auto-approve tfplan
-                        }
-                        'APPLY' {
-                            Write-Host "Planning apply..."
-                            terraform plan   -out=tfplan -no-color -input=false
-                            Write-Host "Applying..."
-                            terraform apply -no-color -input=false -auto-approve tfplan
-
-                            Write-Host "Outputs:"
-                            # Avoid printing any secret outputs (none should exist)
-                            terraform output
-                            terraform output -json | Out-File -FilePath tf-outputs.json -Encoding utf8
-                        }
-                        default { throw "Unsupported TF_ACTION: '$($env:TF_ACTION)'" }
-                        }
-                    '''
-                    }
-                }
-            }
+              if ($env:TF_ACTION -eq "DESTROY") {
+                terraform plan  -destroy -out=tfplan -no-color -input=false
+                terraform apply -no-color -input=false -auto-approve tfplan
+              } else {
+                terraform plan  -out=tfplan -no-color -input=false
+                terraform apply -no-color -input=false -auto-approve tfplan
+                terraform output
+                terraform output -json | Out-File -FilePath tf-outputs.json -Encoding utf8
+              }
+            '''
+          }
         }
-}
-
+      }
+    }
   }
 
   post {
     always {
-      // keep plan & outputs for audit/debug
       archiveArtifacts artifacts: "${TF_DIR}\\tfplan, ${TF_DIR}\\tf-outputs.json", allowEmptyArchive: true
       cleanWs()
     }

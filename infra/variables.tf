@@ -12,12 +12,12 @@ variable "instance_type" {
     default = "t3.small" 
 }
 
-variable "my_ip_cidr" {
-  type        = string
-  description = "Public IPv4 you SSH from, CIDR (e.g. 49.207.145.12/32)."
+variable "allowed_ssh_cidrs" {
+  type        = list(string)
+  description = "CIDR blocks allowed to SSH (port 22)."
   validation {
-    condition     = can(cidrnetmask(var.my_ip_cidr))
-    error_message = "my_ip_cidr must be a valid CIDR, like 203.0.113.10/32."
+    condition     = alltrue([for c in var.allowed_ssh_cidrs : can(cidrnetmask(c))])
+    error_message = "Each entry must be a valid CIDR (e.g., 203.0.113.10/32)."
   }
 }
 
