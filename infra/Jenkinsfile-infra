@@ -2,7 +2,7 @@ pipeline {
   agent { label 'win-dev' }
   options { disableConcurrentBuilds() }
   environment { 
-    TF_IN_AUTOMATION = "true",
+    TF_IN_AUTOMATION = "true"
     TF_DIR = 'infra'
     }
 
