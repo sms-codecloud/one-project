@@ -65,8 +65,8 @@ pipeline {
                 $i++
               }
               if ($cidrs.Count -eq 0) { throw "No CIDRs found in bound credentials." }
-              $json = "[" + ($cidrs | ForEach-Object { '"' + $_ + '"' } -join ",") + "]"
-              Write-Output $json
+                $json = $cidrs | ConvertTo-Json -Compress
+                Write-Output $json
             ''').trim()
 
             env.TF_VAR_allowed_ssh_cidrs = cidrJson
