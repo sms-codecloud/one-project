@@ -37,12 +37,12 @@ parameters {
     stage('Terraform Init & Run') {
         steps {
             withCredentials([
-                [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws_secrets_shankar'],
+                 [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws_secrets_shankar'],
                 string(credentialsId: 'sql_sa_password', variable: 'SQL_SA_PASSWORD')
                 ]) {
                     // Export TF_VAR_* so Terraform picks them up automatically
                     withEnv([
-                        "TF_VAR_sql_sa_password=${env.SQL_SA_PASSWORD}",
+                         "TF_VAR_sql_sa_password=${env.SQL_SA_PASSWORD}",
                         "TF_VAR_my_ip_cidr=${env.MY_IP_CIDR}"
                     ]) {
                     dir("${env.WORKSPACE}\\${env.TF_DIR}") {

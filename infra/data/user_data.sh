@@ -2,7 +2,7 @@
 set -euxo pipefail
 
 # ========== Vars injected by Terraform ==========
-SQL_SA_PASSWORD="${SQL_SA_PASSWORD}"   # TF will inject
+SQL_SA_PASSWORD="${SQL_SA_PASSWORD:-ChangeMe123!Strong}"   # TF will inject
 
 export DEBIAN_FRONTEND=noninteractive
 
@@ -103,7 +103,7 @@ WantedBy=multi-user.target
 UNIT
 
 # Inject SQL SA password into unit env
-sed -i "s/__SQL_SA_PASSWORD__/${SQL_SA_PASSWORD//\//\\/}/g" /etc/systemd/system/studentapi.service
+sed -i "s#__SQL_SA_PASSWORD__#${SQL_SA_PASSWORD}#g" /etc/systemd/system/studentapi.service
 systemctl daemon-reload
 # Do NOT start yet; Jenkins deploy will drop binaries then start:
 # systemctl start studentapi
