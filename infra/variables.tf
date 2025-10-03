@@ -14,7 +14,7 @@ variable "instance_type" {
 
 variable "allowed_ssh_cidrs" {
   type        = list(string)
-  description = "CIDR blocks allowed to SSH (port 22)."
+  description = "CIDR blocks allowed to SSH (22)."
   validation {
     condition     = alltrue([for c in var.allowed_ssh_cidrs : can(cidrnetmask(c))])
     error_message = "Each entry must be a valid CIDR (e.g., 203.0.113.10/32)."

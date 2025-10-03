@@ -38,5 +38,6 @@ resource "aws_instance" "app" {
 user_data = templatefile("${path.module}/data/user_data.sh", {
   SQL_SA_PASSWORD = var.sql_sa_password
 })
+
   tags = { Name = "one-project" }
 }
