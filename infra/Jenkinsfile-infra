@@ -49,7 +49,7 @@ pipeline {
               terraform version
 
               # Init (add -upgrade/-reconfigure if you want)
-              terraform init -no-color
+              terraform -reconfigure -upgrade init -no-color
 
               switch ($env:TF_ACTION) {
                 'DESTROY' {
