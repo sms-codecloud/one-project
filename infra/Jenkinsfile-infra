@@ -9,13 +9,10 @@ pipeline {
     PATH = "C:\\binaries\\terraform;${env.PATH}"
   }
 
-  parameters {
-    choice(
-      name: 'TF_ACTION',
-      choices: ['APPLY', 'DESTROY'],
-      description: 'Choose whether to create or destroy project infrastructure.'
-    )
-  }
+parameters {
+  choice(name: 'TF_ACTION', choices: ['APPLY','DESTROY'], description: 'Terraform action')
+  string(name: 'MY_IP_CIDR', defaultValue: 'x.x.x.x/32', description: 'Your IP in CIDR, e.g. 49.207.145.12/32')
+}
 
   stages {
     stage('Tool Versions') {
@@ -38,43 +35,51 @@ pipeline {
     }
 
     stage('Terraform Init & Run') {
-      steps {
-        withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws_secrets_shankar']]) {
-          dir("${env.WORKSPACE}\\${env.TF_DIR}") {
-            // Use PowerShell for nicer logic, and fix init syntax
-            powershell '''
-              $ErrorActionPreference = "Stop"
-              Write-Host "Selected action: $env:TF_ACTION"
+        steps {
+            withCredentials([
+                [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws_secrets_shankar'],
+                string(credentialsId: 'sql_sa_password', variable: 'SQL_SA_PASSWORD')
+                ]) {
+                    // Export TF_VAR_* so Terraform picks them up automatically
+                    withEnv([
+                        "TF_VAR_sql_sa_password=${env.SQL_SA_PASSWORD}",
+                        "TF_VAR_my_ip_cidr=${env.MY_IP_CIDR}"
+                    ]) {
+                    dir("${env.WORKSPACE}\\${env.TF_DIR}") {
+                    powershell '''
+                        $ErrorActionPreference = "Stop"
+                        Write-Host "Selected action: $env:TF_ACTION"
 
-              terraform version
-              # Correct syntax: subcommand first, then flags
-              terraform init -reconfigure -upgrade -no-color -input=false
+                        terraform version
+                        terraform init -reconfigure -upgrade -no-color -input=false
 
-              switch ($env:TF_ACTION) {
-                'DESTROY' {
-                  Write-Host "Planning destroy..."
-                  terraform plan    -destroy -out=tfplan -no-color -input=false
-                  Write-Host "Destroying..."
-                  terraform apply   -auto-approve tfplan -no-color -input=false
+                        switch ($env:TF_ACTION) {
+                        'DESTROY' {
+                            Write-Host "Planning destroy..."
+                            terraform plan   -destroy -out=tfplan -no-color -input=false
+                            Write-Host "Destroying..."
+                            terraform apply  -auto-approve tfplan -no-color -input=false
+                        }
+                        'APPLY' {
+                            Write-Host "Planning apply..."
+                            terraform plan   -out=tfplan -no-color -input=false
+                            Write-Host "Applying..."
+                            terraform apply  -auto-approve tfplan -no-color -input=false
+
+                            Write-Host "Outputs:"
+                            # Avoid printing any secret outputs (none should exist)
+                            terraform output
+                            terraform output -json | Out-File -FilePath tf-outputs.json -Encoding utf8
+                        }
+                        default { throw "Unsupported TF_ACTION: '$($env:TF_ACTION)'" }
+                        }
+                    '''
+                    }
                 }
-                'APPLY' {
-                  Write-Host "Planning apply..."
-                  terraform plan    -out=tfplan -no-color -input=false
-                  Write-Host "Applying..."
-                  terraform apply   -auto-approve tfplan -no-color -input=false
-                  Write-Host "Outputs:"
-                  terraform output
-                  terraform output -json | Out-File -FilePath tf-outputs.json -Encoding utf8
-                }
-                default {
-                  throw "Unsupported TF_ACTION: '$($env:TF_ACTION)'. Expected 'APPLY' or 'DESTROY'."
-                }
-              }
-            '''
-          }
+            }
         }
-      }
-    }
+}
+
   }
 
   post {

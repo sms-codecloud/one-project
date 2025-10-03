@@ -35,10 +35,8 @@ resource "aws_instance" "app" {
   associate_public_ip_address = true
   vpc_security_group_ids      = [aws_security_group.app.id]
 
-  user_data = templatefile("${path.module}/data/user_data.sh", {
-    SA_PASSWORD     = var.sa_password
-    GITHUB_REPO_URL = var.github_repo_url
-  })
-
+user_data = templatefile("${path.module}/data/user_data.sh", {
+  SQL_SA_PASSWORD = var.sql_sa_password
+})
   tags = { Name = "one-project" }
 }
