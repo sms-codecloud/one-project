@@ -34,6 +34,19 @@ parameters {
       }
     }
 
+    stage('Sanity') {
+        steps {
+            dir("${env.WORKSPACE}\\${env.TF_DIR}") {
+            powershell '''
+                Write-Host "Auto-loaded tfvars files present (should be none):"
+                Get-ChildItem -Force -Name *.tfvars,*.auto.tfvars,*.tfvars.json,*.auto.tfvars.json -ErrorAction SilentlyContinue | % { "  - $_" }
+                Write-Host "`nTF_VAR_* env vars currently set:"
+                Get-ChildItem Env: | ? { $_.Name -like "TF_VAR_*" } | % { "  $($_.Name)=<hidden>" }
+            '''
+            }
+        }
+    }
+
     stage('Terraform Init & Run') {
         steps {
             withCredentials([
@@ -58,13 +71,13 @@ parameters {
                             Write-Host "Planning destroy..."
                             terraform plan   -destroy -out=tfplan -no-color -input=false
                             Write-Host "Destroying..."
-                            terraform apply  -auto-approve tfplan -no-color -input=false
+                            terraform destroy -no-color -input=false -auto-approve tfplan
                         }
                         'APPLY' {
                             Write-Host "Planning apply..."
                             terraform plan   -out=tfplan -no-color -input=false
                             Write-Host "Applying..."
-                            terraform apply  -auto-approve tfplan -no-color -input=false
+                            terraform apply -no-color -input=false -auto-approve tfplan
 
                             Write-Host "Outputs:"
                             # Avoid printing any secret outputs (none should exist)

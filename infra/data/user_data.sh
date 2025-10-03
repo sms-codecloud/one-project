@@ -2,7 +2,7 @@
 set -euxo pipefail
 
 # ========== Vars injected by Terraform ==========
-SQL_SA_PASSWORD="${SQL_SA_PASSWORD:-ChangeMe123!Strong}"   # TF will inject
+SQL_SA_PASSWORD="${SQL_SA_PASSWORD}"   # TF will inject
 
 export DEBIAN_FRONTEND=noninteractive
 
