@@ -1,5 +1,5 @@
 pipeline {
-  agent { label 'windows' }   // ensure your agent label matches
+  agent { label 'dev-win' }   // ensure your agent label matches
 
   options { timestamps(); ansiColor('xterm') }
   triggers { githubPush() }   // or pollSCM('H/2 * * * *')

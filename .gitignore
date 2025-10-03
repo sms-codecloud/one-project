@@ -1,0 +1,85 @@
+# ======================
+# Global OS / Editor junk
+# ======================
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+*.bak
+*.tmp
+*.log
+*.lock
+
+# IDEs
+.vscode/
+.idea/
+*.iml
+
+# ======================
+# Terraform
+# ======================
+terraform/.terraform/
+terraform/.terraform.lock.hcl
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/tfplan
+terraform/tf-outputs.json
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# ======================
+# .NET Core / ASP.NET API
+# ======================
+api/bin/
+api/obj/
+api/**/*.user
+api/**/*.suo
+api/**/*.userosscache
+api/**/*.sln.docstates
+
+# Build output
+api/api-publish/
+
+# Visual Studio
+.vs/
+
+# Resharper / Rider
+_ReSharper*/
+*.[Rr]e[Ss]harper
+*.DotSettings.user
+
+# ======================
+# React (Vite) frontend
+# ======================
+web/node_modules/
+web/dist/
+web/.vite/
+web/package-lock.json
+web/yarn.lock
+web/pnpm-lock.yaml
+
+# Log files
+web/npm-debug.log*
+web/yarn-debug.log*
+web/yarn-error.log*
+
+# ======================
+# Jenkins artifacts
+# ======================
+deploy_pkg/
+deploy.zip
+
+# Jenkins workspace metadata (just in case)
+*.jenkinsfile.bak
+*.jenkinsfile.old
+
+# ======================
+# SQL Server local files (if you run dev DB locally)
+# ======================
+*.mdf
+*.ldf
+*.ndf

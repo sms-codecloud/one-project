@@ -1,0 +1,86 @@
+pipeline {
+  agent { label 'win-dev' }
+  options { disableConcurrentBuilds() }
+  environment { 
+    TF_IN_AUTOMATION = "true",
+    TF_DIR = 'infra'
+    }
+
+  parameters {
+    choice(
+      name: 'TF_ACTION',
+      choices: ['APPLY', 'DESTROY'],
+      description: 'Choose whether to create or destroy EC2 instances.'
+    )
+  }
+
+  stages {
+    stage('Tool Versions') {
+      steps {
+        withEnv(["PATH=C:\\binaries\\terraform;${env.PATH}"]) {
+          bat 'git --version'
+          bat 'dotnet --version'
+          bat 'terraform --version'
+          bat 'node --version'
+        }
+        bat 'dir /s /b *.csproj'
+      }
+    }
+
+    stage('Checkout Repo') {
+      steps {
+        cleanWs()
+        bat 'git --version'
+        dir("${env.WORKSPACE}\\arj-infra") {
+          bat 'git clone -b main https://github.com/sms-codecloud/one-project.git .'
+        }
+      }
+    }
+
+    stage('Terraform Init & Run') {
+    steps {
+      withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws_secrets_shankar']]) {
+        withEnv(["PATH=C:\\binaries\\terraform;${env.PATH}"]) {
+          dir("${env.WORKSPACE}\\one-project\\infra") {
+            powershell '''
+              $ErrorActionPreference = "Stop"
+
+              Write-Host "Selected action: $env:TF_ACTION"
+              terraform version
+
+              # Init (add -upgrade/-reconfigure if you want)
+              terraform init -no-color
+
+              switch ($env:TF_ACTION) {
+                'DESTROY' {
+                  Write-Host "Running plan (destroy)..."
+                  terraform plan -destroy -no-color -input=false
+                  Write-Host "Destroying..."
+                  terraform destroy -no-color -input=false -auto-approve
+                }
+                'APPLY' {
+                  Write-Host "Running plan (apply)..."
+                  terraform plan -no-color -input=false
+                  Write-Host "Applying..."
+                  terraform apply -no-color -input=false -auto-approve
+                }
+                default {
+                  throw "Unsupported TF_ACTION: '$($env:TF_ACTION)'. Expected 'APPLY' or 'DESTROY'."
+                }
+              }
+            '''
+          }
+        }
+      }
+    }
+}
+
+  }
+
+  post {
+    always {
+      echo 'Cleaning up workspace...'
+      cleanWs()
+    }
+  }
+}
