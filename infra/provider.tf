@@ -6,11 +6,8 @@ terraform {
         version = "~> 6.10.0" 
     }
   }
-  backend "s3" {
-    bucket         = "arj-bootcamp"
-    key            = "one-project/state/terraform.tfstate"
-    region         = "ap-south-1"
-    encrypt        = true
+  backend "local" { 
+    path = "D:\\Git-CodeCloud\\terraform_states\\one-project-infra\\terraform.tfstate"
   }
 }
 
