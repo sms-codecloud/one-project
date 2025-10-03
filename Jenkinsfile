@@ -1,8 +1,16 @@
 pipeline {
-  agent { label 'dev-win' }   // ensure your agent label matches
+  agent { label 'dev-win' }   // your Windows agent
 
-  options { timestamps(); ansiColor('xterm') }
-  triggers { githubPush() }   // or pollSCM('H/2 * * * *')
+  options { timestamps() /* add ansiColor('xterm') if plugin installed */ }
+  triggers { githubPush() }   // or: pollSCM('H/2 * * * *')
+
+  parameters {
+    string(
+      name: 'REMOTE_HOST',
+      defaultValue: 'ec2-13-233-83-187.ap-south-1.compute.amazonaws.com',
+      description: 'EC2 public DNS or IP (NO http/https). Example: ec2-xx-xx-xx-xx.region.compute.amazonaws.com'
+    )
+  }
 
   environment {
     API_DIR    = 'api'
@@ -12,8 +20,7 @@ pipeline {
     PKG_DIR    = 'deploy_pkg'
     PKG_ZIP    = 'deploy.zip'
 
-    // --- Remote (EC2) ---
-    REMOTE_HOST = 'ec2-xx-xx-xx-xx.ap-south-1.compute.amazonaws.com' // <- change me
+    // Remote paths on EC2
     REMOTE_USER = 'ubuntu'
     REMOTE_TMP  = '/tmp/deploy'
     DEPLOY_API  = '/var/www/api'
@@ -26,6 +33,19 @@ pipeline {
   stages {
     stage('Checkout') {
       steps { checkout scm }
+    }
+
+    stage('Normalize Host Param') {
+      steps {
+        script {
+          // strip accidental http(s):// and any trailing slashes
+          def raw = params.REMOTE_HOST?.trim() ?: ''
+          def host = raw.replaceFirst('^https?://','').replaceAll('/+$','')
+          if (!host) { error "REMOTE_HOST parameter is empty" }
+          env.DEPLOY_HOST = host
+          echo "Deploy target host: ${env.DEPLOY_HOST}"
+        }
+      }
     }
 
     stage('Backend: Restore & Publish (.NET 8)') {
@@ -68,11 +88,10 @@ pipeline {
     stage('Transfer to EC2 via SSH/SCP') {
       steps {
         sshagent (credentials: ['ec2_ssh_key']) {
-          // Upload bundle
           powershell """
-            \$env:GIT_SSH_COMMAND = 'ssh -o StrictHostKeyChecking=no'
+            \$env:GIT_SSH_COMMAND = 'ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
             scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null `
-              ${env.PKG_ZIP} ${env.REMOTE_USER}@${env.REMOTE_HOST}:/tmp/${env.PKG_ZIP}
+              ${env.PKG_ZIP} ${env.REMOTE_USER}@${env.DEPLOY_HOST}:/tmp/${env.PKG_ZIP}
           """
         }
       }
@@ -81,15 +100,14 @@ pipeline {
     stage('Remote Deploy on EC2') {
       steps {
         sshagent (credentials: ['ec2_ssh_key']) {
-          // Stop, unpack, swap, start, reload
           powershell """
             ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null `
-                ${env.REMOTE_USER}@${env.REMOTE_HOST} `
+                ${env.REMOTE_USER}@${env.DEPLOY_HOST} `
                 'set -euxo pipefail;
                  sudo systemctl stop ${env.SERVICE} || true;
                  rm -rf ${env.REMOTE_TMP} && mkdir -p ${env.REMOTE_TMP};
                  unzip -o /tmp/${env.PKG_ZIP} -d ${env.REMOTE_TMP};
-                 sudo rm -rf ${env.DEPLOY_API}/* ${env.DEPLOY_WEB}/*;
+                 sudo rm -rf ${env.DEPLOY_API}/* ${env.DEPLOY_WEB}/* || true;
                  sudo mkdir -p ${env.DEPLOY_API} ${env.DEPLOY_WEB};
                  sudo cp -r ${env.REMOTE_TMP}/api/* ${env.DEPLOY_API}/;
                  sudo cp -r ${env.REMOTE_TMP}/web/* ${env.DEPLOY_WEB}/;
