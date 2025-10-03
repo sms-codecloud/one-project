@@ -4,13 +4,14 @@ pipeline {
 
   parameters {
     choice(name: 'TF_ACTION', choices: ['APPLY','DESTROY'], description: 'Terraform action')
-    string(name: 'CIDR_CRED_IDS', defaultValue: 'shankar_ip_cidr', description: 'Comma-separated Secret Text credential IDs (each value is a CIDR)')
+    // Comma-separated Secret Text credential IDs; each secret VALUE must be a CIDR like 49.207.145.12/32
+    string(name: 'CIDR_CRED_IDS', defaultValue: 'shankar_ip_cidr', description: 'Comma-separated Secret Text credential IDs')
   }
 
   environment {
     TF_IN_AUTOMATION = 'true'
     TF_DIR           = 'infra'
-    PATH             = "C:\\binaries\\terraform;${env.PATH}" // ensure terraform.exe in PATH
+    PATH             = "C:\\binaries\\terraform;${env.PATH}" // terraform.exe in PATH
   }
 
   stages {
@@ -47,7 +48,7 @@ pipeline {
           bindings.add([$class:'StringBinding', credentialsId:'sql_sa_password', variable:'SQL_SA_PASSWORD'])
 
           withCredentials(bindings) {
-            // Build JSON array entirely in PowerShell
+            // Build JSON array string entirely in PowerShell (no re-parsing later)
             def cidrJson = powershell(returnStdout: true, script: '''
               $ErrorActionPreference = "Stop"
               $cidrs = @()
@@ -64,7 +65,7 @@ pipeline {
                 $i++
               }
               if ($cidrs.Count -eq 0) { throw "No CIDRs found in bound credentials." }
-              # Proper JSON array, e.g. ["1.2.3.4/32","5.6.7.0/24"]
+              # Emit a proper JSON array string, e.g. ["1.2.3.4/32","5.6.7.0/24"]
               ($cidrs | ConvertTo-Json -Compress)
             ''').trim()
 
@@ -80,20 +81,26 @@ pipeline {
       steps {
         withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws_secrets_shankar']]) {
           dir("${env.WORKSPACE}\\${env.TF_DIR}") {
-            // Write cidrs.auto.tfvars.json WITHOUT BOM and with array type
+            // Write cidrs.auto.tfvars.json WITHOUT BOM and with the array directly
             powershell '''
               $ErrorActionPreference = "Stop"
               if (-not $env:ALLOWED_CIDRS_JSON) { throw "ALLOWED_CIDRS_JSON not set" }
-              # Ensure it's an array; if someone passed a single string by mistake, wrap it
+
               $json = $env:ALLOWED_CIDRS_JSON.Trim()
-              if ($json -notmatch "^[\\[]") { $json = '["' + $json.Trim('"') + '"]' }
 
-              $obj = @{ allowed_ssh_cidrs = (ConvertFrom-Json $json) }
-              $content = ($obj | ConvertTo-Json -Compress)
+              # If someone passed a single CIDR string by mistake, wrap it into an array
+              if ($json -notmatch '^[\\[]') {
+                $json = '["' + $json.Trim('"') + '"]'
+              }
 
-              $enc = New-Object System.Text.UTF8Encoding($false)  # no BOM
+              # Final tfvars content must be: {"allowed_ssh_cidrs":[ "...", "..." ]}
+              $content = '{ "allowed_ssh_cidrs": ' + $json + ' }'
+
+              # Write without BOM
+              $enc = New-Object System.Text.UTF8Encoding($false)
               [System.IO.File]::WriteAllText("cidrs.auto.tfvars.json", $content, $enc)
-              Write-Host "Wrote cidrs.auto.tfvars.json:"
+
+              Write-Host "cidrs.auto.tfvars.json content:"
               Write-Host $content
             '''
 
