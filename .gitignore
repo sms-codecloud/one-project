@@ -58,7 +58,6 @@ _ReSharper*/
 web/node_modules/
 web/dist/
 web/.vite/
-web/package-lock.json
 web/yarn.lock
 web/pnpm-lock.yaml
 

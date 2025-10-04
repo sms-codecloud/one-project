@@ -1,0 +1,79 @@
+/* src/components/EditUser.css */
+
+.user-edit-card {
+  max-width: 600px;
+  margin: 50px auto;
+  padding: 30px;
+  border-radius: 10px;
+  background-color: white;
+  box-shadow: 0px 8px 20px rgba(0, 0, 0, 0.1);
+  font-family: "Segoe UI", sans-serif;
+}
+
+.user-edit-card h2 {
+  margin-bottom: 20px;
+  font-size: 24px;
+  color: #333;
+}
+
+form {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.section {
+  border-top: 1px solid #eee;
+  padding-top: 15px;
+}
+
+.section h4 {
+  margin-bottom: 10px;
+  color: #444;
+  font-size: 18px;
+}
+
+label {
+  font-weight: bold;
+  display: block;
+  margin: 10px 0 5px;
+  color: #555;
+}
+
+input {
+  width: 100%;
+  padding: 10px;
+  font-size: 15px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  box-sizing: border-box;
+}
+
+.actions {
+  text-align: right;
+  padding-top: 20px;
+}
+
+button[type="submit"] {
+  background-color: #007bff;
+  color: white;
+  font-weight: bold;
+  padding: 10px 20px;
+  font-size: 15px;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.2s ease-in-out;
+}
+
+button[type="submit"]:hover {
+  background-color: #0056b3;
+}
+
+.home-link {
+  display: inline-block;
+  margin: 20px;
+  color: #3498db;
+  text-decoration: none;
+  font-weight: bold;
+}
