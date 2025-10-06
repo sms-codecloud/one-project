@@ -1,0 +1,125 @@
+pipeline {
+  agent { label 'win-dev' }
+  options { timestamps() }
+  triggers { githubPush() } // or pollSCM
+
+  parameters {
+    string(
+      name: 'REMOTE_HOST',
+      defaultValue: 'ec2-xx-xx-xx-xx.ap-south-1.compute.amazonaws.com',
+      description: 'EC2 public DNS or IP (no http/https)'
+    )
+    string(
+      name: 'HEALTH_PATH',
+      defaultValue: '/api/health',
+      description: 'Relative path for API health check (should return HTTP 200-399)'
+    )
+  }
+
+  environment {
+    API_DIR  = 'api'
+    API_OUT  = 'api-publish'
+    PKG_ZIP  = 'api.zip'
+
+    REMOTE_USER = 'ubuntu'
+    DEPLOY_API  = '/var/www/api'
+    SERVICE     = 'studentapi'
+  }
+
+  stages {
+    stage('Checkout') { steps { checkout scm } }
+
+    stage('Normalize Host') {
+      steps {
+        script {
+          def host = (params.REMOTE_HOST ?: '').trim().replaceFirst('^https?://','').replaceAll('/+$','')
+          if (!host) error 'REMOTE_HOST is empty'
+          env.DEPLOY_HOST = host
+          env.HEALTH_URL  = "http://${host}${params.HEALTH_PATH ?: '/api/health'}"
+          echo "Deploy target host: ${env.DEPLOY_HOST}"
+          echo "Health check URL:   ${env.HEALTH_URL}"
+        }
+      }
+    }
+
+    stage('Build & Publish') {
+      steps {
+        powershell """
+          Set-Location ${env.API_DIR}
+          dotnet --info
+          dotnet restore
+          dotnet publish -c Release -o ..\\${env.API_OUT}
+        """
+      }
+    }
+
+    stage('Package') {
+      steps {
+        powershell """
+          if (Test-Path ${env.PKG_ZIP}) { Remove-Item -Force ${env.PKG_ZIP} }
+          Compress-Archive -Path ${env.API_OUT}\\* -DestinationPath ${env.PKG_ZIP} -Force
+        """
+      }
+    }
+
+    stage('Upload & Deploy') {
+      steps {
+        sshagent (credentials: ['ec2_ssh_key']) {
+          powershell """
+            \$env:GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+            scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null `
+              ${env.PKG_ZIP} ${env.REMOTE_USER}@${env.DEPLOY_HOST}:/tmp/${env.PKG_ZIP}
+
+            ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null `
+              ${env.REMOTE_USER}@${env.DEPLOY_HOST} `
+              'set -euxo pipefail;
+               sudo systemctl stop ${env.SERVICE} || true;
+               sudo mkdir -p ${env.DEPLOY_API};
+               rm -rf /tmp/api_deploy && mkdir -p /tmp/api_deploy;
+               unzip -o /tmp/${env.PKG_ZIP} -d /tmp/api_deploy;
+               sudo rm -rf ${env.DEPLOY_API}/* || true;
+               sudo cp -r /tmp/api_deploy/* ${env.DEPLOY_API}/;
+               sudo chown -R www-data:www-data ${env.DEPLOY_API};
+               sudo systemctl daemon-reload;
+               sudo systemctl start ${env.SERVICE};
+               sudo systemctl enable ${env.SERVICE};
+               rm -rf /tmp/api_deploy /tmp/${env.PKG_ZIP};
+              '
+          """
+        }
+      }
+    }
+
+    stage('Health Check (mark UNSTABLE on failure)') {
+      steps {
+        catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
+          powershell """
+            \$ErrorActionPreference = 'Continue'
+            \$uri = '${env.HEALTH_URL}'
+            Write-Host "Polling health: \$uri"
+            \$ok = \$false
+            for (\$i=1; \$i -le 15; \$i++) {
+              try {
+                \$resp = Invoke-WebRequest -Uri \$uri -UseBasicParsing -TimeoutSec 5
+                if (\$resp.StatusCode -ge 200 -and \$resp.StatusCode -lt 400) {
+                  Write-Host "Health OK: " \$resp.StatusCode
+                  \$ok = \$true; break
+                } else {
+                  Write-Host "Health bad code: " \$resp.StatusCode
+                }
+              } catch {
+                Write-Host "Attempt \$i failed: \$($_.Exception.Message)"
+              }
+              Start-Sleep -Seconds 4
+            }
+            if (-not \$ok) { throw "API health check failed for \$uri" }
+          """
+        }
+      }
+    }
+  }
+
+  post {
+    always { archiveArtifacts artifacts: "${API_OUT}/**/*, ${PKG_ZIP}", allowEmptyArchive: true }
+  }
+}

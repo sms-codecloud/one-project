@@ -1,0 +1,131 @@
+pipeline {
+  agent { label 'win-dev' }
+  options { timestamps() }
+  triggers { githubPush() }
+
+  parameters {
+    string(
+      name: 'REMOTE_HOST',
+      defaultValue: 'ec2-xx-xx-xx-xx.ap-south-1.compute.amazonaws.com',
+      description: 'EC2 public DNS or IP (no http/https)'
+    )
+    string(
+      name: 'HEALTH_PATH',
+      defaultValue: '/',
+      description: 'Relative path for Web health check (should return HTTP 200-399)'
+    )
+  }
+
+  environment {
+    WEB_DIR   = 'web'
+    WEB_OUT   = 'web-dist'
+    PKG_ZIP   = 'web.zip'
+
+    REMOTE_USER = 'ubuntu'
+    DEPLOY_WEB  = '/var/www/app'
+  }
+
+  stages {
+    stage('Checkout') { steps { checkout scm } }
+
+    stage('Normalize Host') {
+      steps {
+        script {
+          def host = (params.REMOTE_HOST ?: '').trim().replaceFirst('^https?://','').replaceAll('/+$','')
+          if (!host) error 'REMOTE_HOST is empty'
+          env.DEPLOY_HOST = host
+          env.HEALTH_URL  = "http://${host}${params.HEALTH_PATH ?: '/'}"
+          echo "Deploy target host: ${env.DEPLOY_HOST}"
+          echo "Health check URL:   ${env.HEALTH_URL}"
+        }
+      }
+    }
+
+    stage('Build Web (Vite)') {
+      steps {
+        powershell """
+          Set-Location ${env.WEB_DIR}
+          node -v
+          npm -v
+
+          # ensure devDependencies (plugin-react) are present
+          $env:NPM_CONFIG_PRODUCTION = 'false'
+          if (Test-Path node_modules) { Remove-Item -Recurse -Force node_modules }
+          if (Test-Path package-lock.json) { npm ci --include=dev } else { npm install --include=dev }
+
+          npm ls @vitejs/plugin-react || (npm i -D @vitejs/plugin-react)
+          npm run build
+
+          New-Item -ItemType Directory -Force -Path ..\\${env.WEB_OUT} | Out-Null
+          Copy-Item -Recurse -Force dist\\* ..\\${env.WEB_OUT}\\
+        """
+      }
+    }
+
+    stage('Package') {
+      steps {
+        powershell """
+          if (Test-Path ${env.PKG_ZIP}) { Remove-Item -Force ${env.PKG_ZIP} }
+          Compress-Archive -Path ${env.WEB_OUT}\\* -DestinationPath ${env.PKG_ZIP} -Force
+        """
+      }
+    }
+
+    stage('Upload & Deploy') {
+      steps {
+        sshagent (credentials: ['ec2_ssh_key']) {
+          powershell """
+            \$env:GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+            scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null `
+              ${env.PKG_ZIP} ${env.REMOTE_USER}@${env.DEPLOY_HOST}:/tmp/${env.PKG_ZIP}
+
+            ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null `
+              ${env.REMOTE_USER}@${env.DEPLOY_HOST} `
+              'set -euxo pipefail;
+               sudo mkdir -p ${env.DEPLOY_WEB};
+               rm -rf /tmp/web_deploy && mkdir -p /tmp/web_deploy;
+               unzip -o /tmp/${env.PKG_ZIP} -d /tmp/web_deploy;
+               sudo rm -rf ${env.DEPLOY_WEB}/* || true;
+               sudo cp -r /tmp/web_deploy/* ${env.DEPLOY_WEB}/;
+               sudo chown -R www-data:www-data ${env.DEPLOY_WEB};
+               sudo nginx -t && sudo systemctl reload nginx;
+               rm -rf /tmp/web_deploy /tmp/${env.PKG_ZIP};
+              '
+          """
+        }
+      }
+    }
+
+    stage('Health Check (mark UNSTABLE on failure)') {
+      steps {
+        catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
+          powershell """
+            \$ErrorActionPreference = 'Continue'
+            \$uri = '${env.HEALTH_URL}'
+            Write-Host "Polling health: \$uri"
+            \$ok = \$false
+            for (\$i=1; \$i -le 15; \$i++) {
+              try {
+                \$resp = Invoke-WebRequest -Uri \$uri -UseBasicParsing -TimeoutSec 5
+                if (\$resp.StatusCode -ge 200 -and \$resp.StatusCode -lt 400) {
+                  Write-Host "Health OK: " \$resp.StatusCode
+                  \$ok = \$true; break
+                } else {
+                  Write-Host "Health bad code: " \$resp.StatusCode
+                }
+              } catch {
+                Write-Host "Attempt \$i failed: \$($_.Exception.Message)"
+              }
+              Start-Sleep -Seconds 4
+            }
+            if (-not \$ok) { throw "Web health check failed for \$uri" }
+          """
+        }
+      }
+    }
+  }
+
+  post {
+    always { archiveArtifacts artifacts: "${WEB_OUT}/**/*, ${PKG_ZIP}", allowEmptyArchive: true }
+  }
+}
