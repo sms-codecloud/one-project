@@ -91,10 +91,38 @@ td:last-child {
 }
 
 textarea {
-  width: 55%;
+  width: 100%;
   padding: 10px;
   font-size: 15px;
   border: 1px solid #ccc;
   border-radius: 6px;
   box-sizing: border-box;
+  resize: none;
+}
+
+.error {
+  border: 2px solid red;
+}
+
+.error-text {
+  color: red;
+  font-size: 14px;
+}
+
+.asterisk {
+  color: red;
+}
+
+.btn {
+  padding: "8px 16px";
+  border-radius: 4;
+  border: "none";
+  font-size: "14px";
+  cursor: "pointer";
+  font-weight: "bold";
+}
+
+.cancelBtn {
+  background-color: "#ccc";
+  color: "#333";
 }
