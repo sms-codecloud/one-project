@@ -6,7 +6,7 @@
 # Specific ownership by directory
 /api/ @shankar
 /infra/ @sharanu
-/ui/ @mahantesh.bhavi
+/ui/ @mahantubhavi
 
 # Optional: for Terraform infra files
 *.tf @shankar
