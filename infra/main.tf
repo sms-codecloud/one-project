@@ -36,8 +36,11 @@ resource "aws_instance" "app" {
   vpc_security_group_ids = [aws_security_group.app.id]
 
   user_data = templatefile("${path.module}/data/user_data.sh", {
-    MYSQL_APP_PASSWORD = var.mysql_app_password
-  })
+  MYSQL_DB          = var.mysql_db
+  MYSQL_USER        = var.mysql_user
+  MYSQL_APP_PASSWORD = var.mysql_app_password
+})
+
 
   tags = { Name = "one-project-ec2" }
 }

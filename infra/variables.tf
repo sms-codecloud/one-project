@@ -27,3 +27,18 @@ variable "mysql_app_password" {
   type      = string
   sensitive = true
 }
+
+variable "mysql_db" {
+  type    = string
+  default = "studentdb"
+}
+
+variable "mysql_user" {
+  type    = string
+  default = "studentapp"
+}
+
+variable "mysql_app_password" {
+  type      = string
+  sensitive = true
+}

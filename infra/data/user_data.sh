@@ -2,6 +2,8 @@
 set -euxo pipefail
 
 # ===== Variables injected by Terraform =====
+MYSQL_DB="${MYSQL_DB}"
+MYSQL_USER="${MYSQL_USER}"
 MYSQL_APP_PASSWORD="${MYSQL_APP_PASSWORD}"
 
 export DEBIAN_FRONTEND=noninteractive
