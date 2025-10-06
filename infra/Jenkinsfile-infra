@@ -4,7 +4,8 @@ pipeline {
 
   parameters {
     choice(name: 'TF_ACTION', choices: ['APPLY','DESTROY'], description: 'Terraform action')
-    string(name: 'CIDR_CRED_IDS', defaultValue: 'shankar_ip_cidr', description: 'Comma-separated Secret Text credential IDs; each contains one CIDR like 1.2.3.4/32')
+    string(name: 'CIDR_CRED_IDS', defaultValue: 'shankar_ip_cidr', description: 'Comma-separated Secret Text credential IDs; each contains a CIDR like 1.2.3.4/32')
+    string(name: 'MYSQL_APP_PASSWORD_ID', defaultValue: 'mysql_app_password', description: 'Secret Text credential ID for MySQL app password')
   }
 
   environment {
@@ -19,15 +20,24 @@ pipeline {
     stage('Bind Secrets → JSON') {
       steps {
         script {
+          // Parse CIDR secret IDs
           def raw = params.CIDR_CRED_IDS.tokenize(',')
           def ids = []; for (r in raw) { def t=r.trim(); if (t) ids<<t }
           if (ids.isEmpty()) error 'No CIDR credential IDs provided.'
 
+          // Build the bindings list
           def bindings = []
-          for (int i=0; i<ids.size(); i++) bindings << [$class:'StringBinding', credentialsId: ids[i], variable: "CIDR_${i}"]
-          bindings << [$class:'StringBinding', credentialsId:'mysql_app_password', variable:'MYSQL_APP_PASSWORD']
+          for (int i=0; i<ids.size(); i++) {
+            bindings << [$class:'StringBinding', credentialsId: ids[i], variable: "CIDR_${i}"]
+          }
+          // Add MySQL secret (parameterized)
+          def mysqlCredId = (params.MYSQL_APP_PASSWORD_ID ?: '').trim()
+          if (!mysqlCredId) { error 'MYSQL_APP_PASSWORD_ID parameter is empty.' }
+          bindings << [$class:'StringBinding', credentialsId: mysqlCredId, variable:'MYSQL_APP_PASSWORD']
 
+          // Try binding; if the ID is wrong/missing Jenkins will throw here
           withCredentials(bindings) {
+            // Build JSON array of CIDRs
             def cidrJson = powershell(returnStdout: true, script: '''
               $ErrorActionPreference = "Stop"
               $cidrs=@(); $i=0
@@ -44,8 +54,10 @@ pipeline {
               ($cidrs | ConvertTo-Json -Compress)
             ''').trim()
 
-            env.ALLOWED_CIDRS_JSON       = cidrJson
-            env.TF_VAR_mysql_app_password = env.MYSQL_APP_PASSWORD
+            env.ALLOWED_CIDRS_JSON         = cidrJson
+            env.TF_VAR_mysql_app_password  = env.MYSQL_APP_PASSWORD
+
+            echo "Prepared ${ids.size()} SSH CIDR(s)."
           }
         }
       }
