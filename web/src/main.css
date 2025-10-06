@@ -72,3 +72,28 @@ td:last-child {
   align-items: center;
   gap: 5px;
 }
+
+.add-user-btn {
+  background-color: #007bff;
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 600;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.15);
+  transition: all 0.3s ease;
+}
+
+.add-user-btn:hover {
+  background-color: #0056b3;
+  transform: translateY(-1px);
+}
+
+textarea {
+  width: 55%;
+  padding: "8px";
+  border: "6px";
+  border-radius: "1px solid #ccc";
+  resize: none;
+}

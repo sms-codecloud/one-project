@@ -1,16 +1,21 @@
 import { FaEye, FaEdit, FaTrash, FaGripLinesVertical } from "react-icons/fa";
-import { Link, Outlet } from "react-router";
+import { Link, useNavigate } from "react-router";
 import useUserInfo from "../context/userContext";
 import { useModal } from "../context/modalContext";
 
 const UsersList = () => {
   const { userList, deleteUser, isLoading } = useUserInfo();
   const { openConfirm } = useModal();
+  const navigate = useNavigate();
 
   const handleDelete = (id) => {
     openConfirm("Are you sure you want to delete this user?", () => {
       deleteUser(id);
     });
+  };
+
+  const handleAddUser = () => {
+    navigate("/add-user");
   };
 
   if (isLoading) {
@@ -19,7 +24,20 @@ const UsersList = () => {
 
   return (
     <>
-      <h3>Users List</h3>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginBottom: "10px",
+        }}
+      >
+        <h3>Users List</h3>
+        <button className="add-user-btn" onClick={() => handleAddUser()}>
+          Add User
+        </button>
+      </div>
+
       <div>
         <table>
           <thead>

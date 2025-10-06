@@ -37,19 +37,11 @@ const UserEdit = () => {
 
         <div className="section">
           <h4>Address</h4>
-          <label>Street</label>
-          <input name="address.street" value={user?.address?.street} />
-
-          <label>Suite</label>
-          <input name="address.suite" value={user?.address?.suite} />
-
-          <label>City</label>
-          <input name="address.city" value={user?.address?.city} />
-
-          <label>Zipcode</label>
-          <input name="address.zipcode" value={user?.address?.zipcode} />
+          <textarea
+            name="address.street"
+            value={`${user?.address?.street}, ${user?.address?.suite}, ${user?.address?.city} - ${user?.address?.zipcode}`}
+          />
         </div>
-
         <div className="actions">
           <button type="submit">Save</button>
           <Link to="/" style={{ padding: "10px" }}>

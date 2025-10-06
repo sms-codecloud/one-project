@@ -6,6 +6,7 @@ import UserDetails from "./components/UserDetails";
 import UsersList from "./components/UserList";
 import UserEdit from "./components/UserEdit";
 import Error from "./components/Error";
+import AddUser from "./components/AddUser";
 
 function App() {
   const appRouter = createBrowserRouter([
@@ -17,6 +18,7 @@ function App() {
         { path: "/", element: <UsersList /> }, // /users
         { path: "users/:id", element: <UserDetails /> }, // /user details
         { path: "users/:id/edit", element: <UserEdit /> }, // /user eidt
+        { path: "add-user", element: <AddUser /> }, // /user creation
       ],
     },
   ]);
