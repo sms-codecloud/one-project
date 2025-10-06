@@ -52,7 +52,7 @@ const UserEdit = () => {
 
         <div className="actions">
           <button type="submit">Save</button>
-          <Link to="/" className="home-link">
+          <Link to="/" style={{ padding: "10px" }}>
             Back to List
           </Link>
         </div>

@@ -37,7 +37,7 @@ const UsersList = () => {
                   <td>{ul.name}</td>
                   <td>{ul.email}</td>
                   <td>{ul.phone}</td>
-                  <td>
+                  <td className="action-icons">
                     <Link to={`/users/${ul.id}`} title="View Details">
                       <FaEye color="gray" />
                     </Link>
