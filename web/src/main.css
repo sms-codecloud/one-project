@@ -92,8 +92,9 @@ td:last-child {
 
 textarea {
   width: 55%;
-  padding: "8px";
-  border: "6px";
-  border-radius: "1px solid #ccc";
-  resize: none;
+  padding: 10px;
+  font-size: 15px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  box-sizing: border-box;
 }
