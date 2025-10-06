@@ -30,17 +30,14 @@ resource "aws_security_group" "app" {
 }
 
 resource "aws_instance" "app" {
-  ami                    = "ami-0e6329e222e662a52" # Ubuntu 22.04 LTS (ap-south-1)
-  instance_type          = var.instance_type
-  key_name               = var.key_name
-  vpc_security_group_ids = [aws_security_group.app.id]
-
+  ami                         = "ami-0e6329e222e662a52"
+  instance_type               = var.instance_type
+  key_name                    = var.key_name
+  vpc_security_group_ids      = [aws_security_group.app.id]
+  subnet_id                   = element(data.aws_subnets.default.ids, 0)
+  associate_public_ip_address = true   # <- important
   user_data = templatefile("${path.module}/data/user_data.sh", {
-  MYSQL_DB          = var.mysql_db
-  MYSQL_USER        = var.mysql_user
-  MYSQL_APP_PASSWORD = var.mysql_app_password
-})
-
-
+    MYSQL_DB = var.mysql_db, MYSQL_USER = var.mysql_user, MYSQL_APP_PASSWORD = var.mysql_app_password
+  })
   tags = { Name = "one-project-ec2" }
 }
