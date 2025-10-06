@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -euxo pipefail
 
-# ========== Vars injected by Terraform ==========
-SQL_SA_PASSWORD="${SQL_SA_PASSWORD}"   # TF will inject
+# ===== Variables injected by Terraform =====
+MYSQL_APP_PASSWORD="${MYSQL_APP_PASSWORD}"
 
 export DEBIAN_FRONTEND=noninteractive
 
-# ---------- Base tools ----------
+# ---------- Base packages ----------
 apt-get update
 apt-get install -y apt-transport-https ca-certificates curl gnupg lsb-release software-properties-common unzip git ufw
 
@@ -14,79 +14,40 @@ apt-get install -y apt-transport-https ca-certificates curl gnupg lsb-release so
 apt-get install -y nginx
 systemctl enable --now nginx
 
-# ---------- Microsoft packages ----------
+# ---------- Install .NET 8 runtime ----------
 wget -q https://packages.microsoft.com/config/ubuntu/22.04/packages-microsoft-prod.deb
 dpkg -i packages-microsoft-prod.deb
 apt-get update
-
-# Install ONLY runtime needed to host published app (lighter than SDK)
 apt-get install -y aspnetcore-runtime-8.0
 
-# ---------- SQL Server 2022 Developer ----------
-curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | apt-key add -
-add-apt-repository -y "$(curl -fsSL https://packages.microsoft.com/config/ubuntu/22.04/mssql-server-2022.list)"
-apt-get update
-ACCEPT_EULA=Y apt-get install -y mssql-server
+# ---------- Install MySQL Server (local DB for API) ----------
+apt-get install -y mysql-server
 
-# Non-interactive setup: set SA password & accept EULA
-ACCEPT_EULA=Y MSSQL_SA_PASSWORD="${SQL_SA_PASSWORD}" /opt/mssql/bin/mssql-conf -n setup
+# Bind only to localhost for safety (no external access)
+sed -i 's/^[# ]*bind-address.*/bind-address = 127.0.0.1/' /etc/mysql/mysql.conf.d/mysqld.cnf
+systemctl enable --now mysql
 
-# SQL tools (sqlcmd) and path
-curl -fsSL https://packages.microsoft.com/config/ubuntu/22.04/prod.list -o /etc/apt/sources.list.d/msprod.list
-apt-get update
-ACCEPT_EULA=Y apt-get install -y mssql-tools unixodbc-dev
-echo 'export PATH="$PATH:/opt/mssql-tools/bin"' >/etc/profile.d/mssql.sh
-source /etc/profile.d/mssql.sh
+# Create app database and user (avoid touching root plugin)
+MYSQL_DB="studentdb"
+MYSQL_USER="studentapp"
+MYSQL_PWD="$MYSQL_APP_PASSWORD"
 
-# Ensure service is up
-systemctl enable --now mssql-server
+mysql --protocol=socket -uroot <<SQL
+CREATE DATABASE IF NOT EXISTS \`${MYSQL_DB}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER IF NOT EXISTS '${MYSQL_USER}'@'localhost' IDENTIFIED BY '${MYSQL_PWD}';
+GRANT ALL PRIVILEGES ON \`${MYSQL_DB}\`.* TO '${MYSQL_USER}'@'localhost';
+FLUSH PRIVILEGES;
+SQL
 
-# Create DB if not exists
-/opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P "${SQL_SA_PASSWORD}" -Q "IF DB_ID('StudentDb') IS NULL CREATE DATABASE StudentDb;"
-
-# ---------- Web roots & perms ----------
-mkdir -p /var/www/app
+# ---------- Folders ----------
 mkdir -p /var/www/api
+mkdir -p /var/www/app
 chown -R www-data:www-data /var/www
-chmod -R 775 /var/www
 
-# ---------- Nginx site (SPA + reverse proxy) ----------
-cat >/etc/nginx/sites-available/app.conf <<'NGINX'
-server {
-    listen 80 default_server;
-    server_name _;
-
-    # React static build
-    root /var/www/app;
-    index index.html;
-
-    # SPA fallback
-    location / {
-        try_files $uri /index.html;
-    }
-
-    # API reverse proxy to Kestrel
-    location /api/ {
-        proxy_pass http://127.0.0.1:5000/;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection keep-alive;
-        proxy_set_header Host $host;
-        proxy_cache_bypass $http_upgrade;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-NGINX
-
-rm -f /etc/nginx/sites-enabled/default
-ln -s /etc/nginx/sites-available/app.conf /etc/nginx/sites-enabled/app.conf
-nginx -t && systemctl reload nginx
-
-# ---------- systemd service for API ----------
+# ---------- Systemd service for API ----------
 cat >/etc/systemd/system/studentapi.service <<'UNIT'
 [Unit]
-Description=Student API (.NET 8, Kestrel)
+Description=Student API
 After=network.target
 
 [Service]
@@ -95,17 +56,50 @@ ExecStart=/usr/bin/dotnet /var/www/api/StudentApi.dll
 Restart=always
 RestartSec=5
 User=www-data
+EnvironmentFile=/etc/studentapi.env
 Environment=ASPNETCORE_URLS=http://127.0.0.1:5000
-Environment=ConnectionStrings__Default=Server=localhost,1433;Database=StudentDb;User ID=sa;Password=__SQL_SA_PASSWORD__;TrustServerCertificate=True;Encrypt=False
 
 [Install]
 WantedBy=multi-user.target
 UNIT
 
-# Inject SQL SA password into unit env
-sed -i "s#__SQL_SA_PASSWORD__#${SQL_SA_PASSWORD}#g" /etc/systemd/system/studentapi.service
+# ---------- Connection string in env file ----------
+cat >/etc/studentapi.env <<ENVVARS
+ConnectionStrings__Default=Server=127.0.0.1;Port=3306;Database=studentdb;User Id=studentapp;Password=__SQL_APP_PASSWORD__;SslMode=Preferred
+ENVVARS
+
+# Inject app DB password into env file
+sed -i "s#__SQL_APP_PASSWORD__#${MYSQL_APP_PASSWORD}#g" /etc/studentapi.env
+chmod 600 /etc/studentapi.env
+chown root:root /etc/studentapi.env
+
+# ---------- Simple Nginx reverse proxy to Kestrel ----------
+cat >/etc/nginx/sites-available/studentapp <<'NGX'
+server {
+    listen 80;
+    server_name _;
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:5000/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    location / {
+        root /var/www/app;
+        try_files $uri /index.html;
+    }
+}
+NGX
+
+ln -sf /etc/nginx/sites-available/studentapp /etc/nginx/sites-enabled/studentapp
+rm -f /etc/nginx/sites-enabled/default
+nginx -t
+systemctl reload nginx
+
+# Enable service (Jenkins deploy will push binaries before starting)
 systemctl daemon-reload
-# Do NOT start yet; Jenkins deploy will drop binaries then start:
-# systemctl start studentapi
+systemctl enable studentapi
 
 echo "Bootstrap complete."

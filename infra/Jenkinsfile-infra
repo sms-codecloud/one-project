@@ -45,7 +45,7 @@ pipeline {
           def bindings = []
           int i = 0
           for (id in ids) { bindings.add([$class:'StringBinding', credentialsId:id, variable:"CIDR_${i}"]); i++ }
-          bindings.add([$class:'StringBinding', credentialsId:'sql_sa_password', variable:'SQL_SA_PASSWORD'])
+          bindings.add([$class:'StringBinding', credentialsId:'mysql_app_password', variable:'MYSQL_APP_PASSWORD'])
 
           withCredentials(bindings) {
             // Build JSON array string entirely in PowerShell (no Groovy env[] access)
@@ -71,7 +71,7 @@ pipeline {
 
             // Save for next stage; keep password only in memory as TF_VAR
             env.ALLOWED_CIDRS_JSON     = cidrJson
-            env.TF_VAR_sql_sa_password = env.SQL_SA_PASSWORD
+            env.TF_VAR_mysql_app_password = env.MYSQL_APP_PASSWORD
 
             echo "Prepared ${ids.size()} SSH CIDR(s)."
           }

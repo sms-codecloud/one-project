@@ -1,15 +1,16 @@
-variable "region"{ 
-    type = string  
-    default = "ap-south-1" 
+variable "region" {
+  type    = string
+  default = "ap-south-1"
 }
-variable "key_name" { 
-    type = string 
-    default = "one-project-key-pair"
+
+variable "key_name" {
+  type    = string
+  default = "one-project-key-pair"
 }
-                         
-variable "instance_type" { 
-    type = string  
-    default = "t3.small" 
+
+variable "instance_type" {
+  type    = string
+  default = "t3.small"
 }
 
 variable "allowed_ssh_cidrs" {
@@ -21,7 +22,8 @@ variable "allowed_ssh_cidrs" {
   }
 }
 
-variable "sql_sa_password" {
+# NEW: app DB user password for MySQL on the EC2 box
+variable "mysql_app_password" {
   type      = string
   sensitive = true
-}      
+}

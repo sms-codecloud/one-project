@@ -7,8 +7,3 @@ output "app_url"       {
     value = "http://${aws_instance.app.public_dns}" 
     description = "URL of the application"
 }
-
-# output "jenkins_url"   { 
-#     value = "http://${aws_instance.app.public_dns}:8080" 
-#     description = "URL of the Jenkins server"
-# }
