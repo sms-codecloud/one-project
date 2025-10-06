@@ -22,12 +22,6 @@ variable "allowed_ssh_cidrs" {
   }
 }
 
-# NEW: app DB user password for MySQL on the EC2 box
-variable "mysql_app_password" {
-  type      = string
-  sensitive = true
-}
-
 variable "mysql_db" {
   type    = string
   default = "studentdb"
