@@ -1,0 +1,12 @@
+# CODEOWNERS - define reviewers automatically for PRs
+
+# Global owner for everything
+* @shankar
+
+# Specific ownership by directory
+/api/ @shankar
+/infra/ @sharanu
+/ui/ @mahantesh
+
+# Optional: for Terraform infra files
+*.tf @shankar
