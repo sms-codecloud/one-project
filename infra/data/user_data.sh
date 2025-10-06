@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 set -euxo pipefail
 
-# ===== Variables injected by Terraform =====
-MYSQL_DB="${MYSQL_DB}"
-MYSQL_USER="${MYSQL_USER}"
-MYSQL_APP_PASSWORD="${MYSQL_APP_PASSWORD}"
+# ===== Vars injected by Terraform templatefile(...) =====
+# (These names MUST match the keys you pass from main.tf)
+MYSQL_DB="$MYSQL_DB"
+MYSQL_USER="$MYSQL_USER"
+MYSQL_APP_PASSWORD="$MYSQL_APP_PASSWORD"
 
 export DEBIAN_FRONTEND=noninteractive
 
@@ -16,28 +17,24 @@ apt-get install -y apt-transport-https ca-certificates curl gnupg lsb-release so
 apt-get install -y nginx
 systemctl enable --now nginx
 
-# ---------- Install .NET 8 runtime ----------
+# ---------- .NET 8 runtime ----------
 wget -q https://packages.microsoft.com/config/ubuntu/22.04/packages-microsoft-prod.deb
 dpkg -i packages-microsoft-prod.deb
 apt-get update
 apt-get install -y aspnetcore-runtime-8.0
 
-# ---------- Install MySQL Server (local DB for API) ----------
+# ---------- MySQL Server (local) ----------
 apt-get install -y mysql-server
 
-# Bind only to localhost for safety (no external access)
+# Bind to localhost only
 sed -i 's/^[# ]*bind-address.*/bind-address = 127.0.0.1/' /etc/mysql/mysql.conf.d/mysqld.cnf
 systemctl enable --now mysql
 
-# Create app database and user (avoid touching root plugin)
-MYSQL_DB="studentdb"
-MYSQL_USER="studentapp"
-MYSQL_PWD="$MYSQL_APP_PASSWORD"
-
+# Create DB + user
 mysql --protocol=socket -uroot <<SQL
-CREATE DATABASE IF NOT EXISTS \`${MYSQL_DB}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE USER IF NOT EXISTS '${MYSQL_USER}'@'localhost' IDENTIFIED BY '${MYSQL_PWD}';
-GRANT ALL PRIVILEGES ON \`${MYSQL_DB}\`.* TO '${MYSQL_USER}'@'localhost';
+CREATE DATABASE IF NOT EXISTS \`$MYSQL_DB\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER IF NOT EXISTS '$MYSQL_USER'@'localhost' IDENTIFIED BY '$MYSQL_APP_PASSWORD';
+GRANT ALL PRIVILEGES ON \`$MYSQL_DB\`.* TO '$MYSQL_USER'@'localhost';
 FLUSH PRIVILEGES;
 SQL
 
@@ -65,17 +62,14 @@ Environment=ASPNETCORE_URLS=http://127.0.0.1:5000
 WantedBy=multi-user.target
 UNIT
 
-# ---------- Connection string in env file ----------
-cat >/etc/studentapi.env <<ENVVARS
-ConnectionStrings__Default=Server=127.0.0.1;Port=3306;Database=studentdb;User Id=studentapp;Password=__SQL_APP_PASSWORD__;SslMode=Preferred
-ENVVARS
-
-# Inject app DB password into env file
-sed -i "s#__SQL_APP_PASSWORD__#${MYSQL_APP_PASSWORD}#g" /etc/studentapi.env
+# ---------- Connection string env file ----------
+cat >/etc/studentapi.env <<EOF
+ConnectionStrings__Default=Server=127.0.0.1;Port=3306;Database=$MYSQL_DB;User Id=$MYSQL_USER;Password=$MYSQL_APP_PASSWORD;SslMode=Preferred
+EOF
 chmod 600 /etc/studentapi.env
 chown root:root /etc/studentapi.env
 
-# ---------- Simple Nginx reverse proxy to Kestrel ----------
+# ---------- Nginx reverse proxy ----------
 cat >/etc/nginx/sites-available/studentapp <<'NGX'
 server {
     listen 80;
@@ -100,7 +94,6 @@ rm -f /etc/nginx/sites-enabled/default
 nginx -t
 systemctl reload nginx
 
-# Enable service (Jenkins deploy will push binaries before starting)
 systemctl daemon-reload
 systemctl enable studentapi
 
