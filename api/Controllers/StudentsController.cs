@@ -7,31 +7,43 @@ namespace StudentApi.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
-public class StudentsController : ControllerBase {
+public class StudentsController : ControllerBase
+{
     private readonly AppDbContext _db;
     public StudentsController(AppDbContext db) => _db = db;
 
-    [HttpGet] public async Task<ActionResult<IEnumerable<Student>>> Get() => await _db.Students.AsNoTracking().ToListAsync();
+    [HttpGet]
+    public async Task<ActionResult<IEnumerable<Student>>> Get()
+        => await _db.Students.AsNoTracking().ToListAsync();
 
-    [HttpGet("{id:int}")] public async Task<ActionResult<Student>> GetOne(int id) {
+    [HttpGet("{id:int}")]
+    public async Task<ActionResult<Student>> GetOne(int id)
+    {
         var s = await _db.Students.FindAsync(id);
         return s is null ? NotFound() : Ok(s);
     }
 
-    [HttpPost] public async Task<ActionResult<Student>> Create(Student s) {
+    [HttpPost]
+    public async Task<ActionResult<Student>> Create(Student s)
+    {
         _db.Students.Add(s);
         await _db.SaveChangesAsync();
         return CreatedAtAction(nameof(GetOne), new { id = s.Id }, s);
     }
 
-    [HttpPut("{id:int}")] public async Task<IActionResult> Update(int id, Student s) {
+    [HttpPut("{id:int}")]
+    public async Task<IActionResult> Update(int id, Student s)
+    {
         if (id != s.Id) return BadRequest();
+        if (!await _db.Students.AnyAsync(x => x.Id == id)) return NotFound();
         _db.Entry(s).State = EntityState.Modified;
         await _db.SaveChangesAsync();
         return NoContent();
     }
 
-    [HttpDelete("{id:int}")] public async Task<IActionResult> Delete(int id) {
+    [HttpDelete("{id:int}")]
+    public async Task<IActionResult> Delete(int id)
+    {
         var s = await _db.Students.FindAsync(id);
         if (s is null) return NotFound();
         _db.Students.Remove(s);

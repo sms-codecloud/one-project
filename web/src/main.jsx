@@ -1,35 +1,57 @@
 import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { api } from "./api";
 
 function App() {
   const [students, setStudents] = useState([]);
   const [form, setForm] = useState({ name: "", email: "", age: 18 });
+  const [error, setError] = useState("");
 
-  const load = async () => setStudents(await fetch("/api/students").then(r => r.json()));
-  useEffect(() => { load(); }, []);
-
-  const submit = async e => {
-    e.preventDefault();
-    await fetch("/api/students", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(form) });
-    setForm({ name: "", email: "", age: 18 }); load();
+  const load = async () => {
+    try {
+      setStudents(await api("/students"));
+    } catch (e) {
+      setError(e.message || String(e));
+    }
   };
 
-  const remove = async id => { await fetch(`/api/students/${id}`, { method: "DELETE" }); load(); };
+  useEffect(() => { load(); }, []);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setError("");
+    try {
+      await api("/students", { method: "POST", body: form });
+      setForm({ name: "", email: "", age: 18 });
+      await load();
+    } catch (e) { setError(e.message || String(e)); }
+  };
+
+  const remove = async (id) => {
+    setError("");
+    try { await api(`/students/${id}`, { method: "DELETE" }); await load(); }
+    catch (e) { setError(e.message || String(e)); }
+  };
 
   return (
-    <div style={{ maxWidth: 640, margin: "2rem auto", fontFamily: "system-ui" }}>
+    <div style={{fontFamily:"system-ui,Segoe UI,Roboto,Arial",maxWidth:800,margin:"40px auto"}}>
       <h1>Student Registration</h1>
-      <form onSubmit={submit} style={{ display: "grid", gap: 8 }}>
-        <input placeholder="Name"  value={form.name}  onChange={e=>setForm({...form, name:e.target.value})} required />
-        <input placeholder="Email" value={form.email} onChange={e=>setForm({...form, email:e.target.value})} required />
-        <input type="number" placeholder="Age" value={form.age} onChange={e=>setForm({...form, age:Number(e.target.value)})} required />
-        <button>Add</button>
+
+      {error && <p style={{color:"crimson"}}>Error: {error}</p>}
+
+      <form onSubmit={submit} style={{display:"grid",gap:8,maxWidth:400}}>
+        <input placeholder="Name"  value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} required/>
+        <input placeholder="Email" value={form.email} onChange={e=>setForm(f=>({...f,email:e.target.value}))} type="email" required/>
+        <input placeholder="Age"   value={form.age} onChange={e=>setForm(f=>({...f,age:+e.target.value||0}))} type="number" min="1" />
+        <button type="submit">Add</button>
       </form>
+
       <h2 style={{marginTop:24}}>Students</h2>
       <ul>
         {students.map(s => (
-          <li key={s.id}>
-            {s.name} ({s.email}, {s.age}) <button onClick={()=>remove(s.id)}>Delete</button>
+          <li key={s.id} style={{marginBottom:6}}>
+            {s.name} ({s.email}, {s.age}){" "}
+            <button onClick={()=>remove(s.id)}>Delete</button>
           </li>
         ))}
       </ul>
@@ -37,4 +59,4 @@ function App() {
   );
 }
 
-createRoot(document.getElementById("root")).render(<App/>);
+createRoot(document.getElementById("root")).render(<App />);
