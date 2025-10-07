@@ -1,38 +1,54 @@
 pipeline {
   agent { label 'win-dev' }
 
-  options { timestamps(); ansiColor('xterm'); disableConcurrentBuilds() }
+  options {
+    timestamps()
+    ansiColor('xterm')
+    disableConcurrentBuilds()
+  }
 
   parameters {
-    string(name: 'PROJECT_REL', defaultValue: 'api', description: 'Path within repo to the API project or folder')
+    // Build settings
     choice(name: 'CONFIG', choices: ['Release','Debug'], description: 'Build configuration')
-    booleanParam(name: 'RUN_TESTS', defaultValue: true, description: 'Run tests')
-    string(name: 'AWS_REGION', defaultValue: 'ap-south-1', description: 'AWS region')
+    booleanParam(name: 'RUN_TESTS', defaultValue: true, description: 'Run tests if any are found')
+    string(name: 'PROJECT_REL', defaultValue: 'api', description: "Path under repo to start search (e.g., 'api'). Auto-fallback: solution at root -> root, else 'api'.")
+
+    // AWS / Deploy
+    string(name: 'AWS_REGION',   defaultValue: 'ap-south-1', description: 'AWS region')
     string(name: 'AWS_CREDS_ID', defaultValue: 'aws_secrets_shankar', description: 'Jenkins AWS creds ID')
     string(name: 'EC2_INSTANCE_ID', defaultValue: '', description: 'Target Windows EC2 instance id (SSM)')
-    string(name: 'MYSQL_APP_PASSWORD_CRED_ID', defaultValue: 'mysql_app_password', description: 'Secret Text credential ID for MySQL app password (prod)')
+
+    // Secret Text credential ID for MySQL app password (PROD)
+    string(name: 'MYSQL_APP_PASSWORD_CRED_ID', defaultValue: 'mysql_app_password_prod', description: 'Secret Text credential ID for MySQL app password (prod)')
   }
 
   environment {
     DOTNET_CLI_TELEMETRY_OPTOUT       = '1'
     DOTNET_SKIP_FIRST_TIME_EXPERIENCE = '1'
+
     CLONE_ROOT   = 'D:\\jenkins-workspace\\workspace'
-    BUILD_DIR    = "${CLONE_ROOT}\\${JOB_NAME}\\${BUILD_NUMBER}"
+    BUILD_DIR    = "D:\\jenkins-workspace\\workspace\\${JOB_NAME}" // fixed path per job (no BUILD_NUMBER)
+    REPO_DIR     = "${BUILD_DIR}\\repo"
+
     PUBLISH_DIR  = 'publish'
     ARTIFACT_ZIP = 'student-api.zip'
-    S3_BUCKET    = 'arj-bootcamp'                   // set once here
-    S3_KEY       = "api/student-api-${BUILD_NUMBER}.zip" // latest build-numbered key
+
+    S3_BUCKET    = 'arj-bootcamp'
+    S3_KEY       = "api/student-api-${BUILD_NUMBER}.zip" // always latest build number
   }
 
   stages {
+
     stage('Resolve SCM (URL & Branch)') {
       steps {
         script {
+          // Get Git URL from job SCM
           def cfg = null
           try { cfg = scm.getUserRemoteConfigs() } catch (ignored) {}
-          if (!cfg || cfg.isEmpty()) { error "Could not read userRemoteConfigs from job SCM. Configure SCM in the job." }
+          if (!cfg || cfg.isEmpty()) { error "Job SCM not configured (no userRemoteConfigs)." }
           env._GIT_URL = cfg[0].getUrl()
 
+          // Determine branch
           def br = env.BRANCH_NAME ?: ''
           if (!br?.trim()) {
             try {
@@ -40,7 +56,7 @@ pipeline {
               if (branches && branches.size() > 0) { br = branches[0].getName() }
             } catch (ignored) {}
           }
-          if (!br?.trim()) { error "Could not determine branch from job SCM (BRANCH_NAME or scm.getBranches())." }
+          if (!br?.trim()) { error "Could not determine branch from job SCM (BRANCH_NAME/scm.getBranches())." }
           env._BRANCH = br.replaceFirst('^\\*/', '')
           echo "SCM URL: ${env._GIT_URL}"
           echo "SCM Branch: ${env._BRANCH}"
@@ -48,163 +64,202 @@ pipeline {
       }
     }
 
-    stage('Prepare clean external build folder') {
+    stage('Prepare fixed build folder (overwrite)') {
       steps {
         powershell '''
           $ErrorActionPreference = "Stop"
-          if (Test-Path $env:BUILD_DIR) { Remove-Item -Recurse -Force $env:BUILD_DIR }
-          New-Item -ItemType Directory -Force -Path $env:BUILD_DIR | Out-Null
+
+          if (!(Test-Path "$env:BUILD_DIR")) {
+            New-Item -ItemType Directory -Force -Path "$env:BUILD_DIR" | Out-Null
+          }
+
+          if (Test-Path "$env:REPO_DIR") {
+            Write-Host "Removing existing repo dir: $env:REPO_DIR"
+            Remove-Item -Recurse -Force "$env:REPO_DIR"
+          }
+          New-Item -ItemType Directory -Force -Path "$env:REPO_DIR" | Out-Null
         '''
       }
     }
 
-    stage('Clone into external directory') {
+    stage('Clone into fixed directory') {
       steps {
-        dir("${env.BUILD_DIR}") {
+        dir("${env.REPO_DIR}") {
           bat """
             @echo on
             git --version
-            git clone --branch "%_BRANCH%" --depth 1 "%_GIT_URL%" repo
+            git clone --branch "%_BRANCH%" --depth 1 "%_GIT_URL%" .
           """
+        }
+        // Quick listing for visibility
+        dir("${env.REPO_DIR}") {
+          powershell '''
+            Write-Host "Repo root: $((Get-Location).Path)"
+            Get-ChildItem -Force
+          '''
         }
       }
     }
 
-  stage('Restore & Build (local validation)') {
-  steps {
-    dir("${env.BUILD_DIR}\\repo") {
-      powershell '''
-        $ErrorActionPreference = "Stop"
+    stage('Restore & Build (local validation)') {
+      steps {
+        dir("${env.REPO_DIR}") {
+          powershell '''
+            $ErrorActionPreference = "Stop"
 
-        Write-Host "Repo root: $((Get-Location).Path)"
-        Write-Host "PROJECT_REL: $env:PROJECT_REL"
-        if (!(Test-Path "$env:PROJECT_REL")) {
-          Write-Host 'Contents of repo root:'; Get-ChildItem -Force
-          throw 'PROJECT_REL path does not exist. Fix the parameter so it points under the repo root.'
-        }
+            Write-Host "PROJECT_REL param: $env:PROJECT_REL"
 
-        $base = Join-Path (Get-Location) "$env:PROJECT_REL"
+            # Resolve base folder to search for sln/csproj
+            $base = Join-Path (Get-Location) "$env:PROJECT_REL"
+            if (!(Test-Path $base)) {
+              Write-Warning "PROJECT_REL '$env:PROJECT_REL' not found. Trying fallbacks..."
+              $slnAtRoot = Get-ChildItem -Path (Get-Location) -Filter *.sln | Select-Object -First 1
+              if ($slnAtRoot) {
+                $base = (Get-Location) ; Write-Host "Using repo root (solution found at root: $($slnAtRoot.Name))"
+              } elseif (Test-Path 'api') {
+                $base = Join-Path (Get-Location) 'api' ; Write-Host "Falling back to 'api' folder."
+              } else {
+                Write-Host 'Contents of repo root:'; Get-ChildItem -Force
+                throw "Cannot resolve a valid PROJECT_REL. Fix parameter (e.g., 'api')."
+              }
+            }
 
-        $sln = Get-ChildItem -Path $base -Recurse -Filter *.sln | Select-Object -First 1
-        $csproj = if (-not $sln) { Get-ChildItem -Path $base -Recurse -Filter *.csproj | Select-Object -First 1 }
+            # Prefer solution, else project
+            $sln    = Get-ChildItem -Path $base -Recurse -Filter *.sln   | Select-Object -First 1
+            $csproj = if (-not $sln) { Get-ChildItem -Path $base -Recurse -Filter *.csproj | Select-Object -First 1 }
 
-        if ($sln) {
-          Write-Host "Using solution: $($sln.FullName)"
-          dotnet --info
-          dotnet restore "$($sln.FullName)"
-          dotnet build   "$($sln.FullName)" -c $env:CONFIG --no-restore
+            if ($sln) {
+              Write-Host "Using solution: $($sln.FullName)"
+              dotnet --info
+              dotnet restore "$($sln.FullName)"
+              dotnet build   "$($sln.FullName)" -c $env:CONFIG --no-restore
+            }
+            elseif ($csproj) {
+              Write-Host "Using project: $($csproj.FullName)"
+              dotnet --info
+              dotnet restore "$($csproj.FullName)"
+              dotnet build   "$($csproj.FullName)" -c $env:CONFIG --no-restore
+            }
+            else {
+              Write-Host "Listing of selected base:"; Get-ChildItem -Recurse -Force -Path $base
+              throw 'No .sln or .csproj found.'
+            }
+          '''
         }
-        elseif ($csproj) {
-          Write-Host "Using project: $($csproj.FullName)"
-          dotnet --info
-          dotnet restore "$($csproj.FullName)"
-          dotnet build   "$($csproj.FullName)" -c $env:CONFIG --no-restore
-        }
-        else {
-          Write-Host "Listing of PROJECT_REL:"; Get-ChildItem -Recurse -Force -Path $base
-          throw 'No .sln or .csproj found under PROJECT_REL.'
-        }
-      '''
+      }
     }
-  }
-}
-
-
-
 
     stage('Test') {
       when { expression { return params.RUN_TESTS } }
       steps {
-        dir("${env.BUILD_DIR}\\repo") {
+        dir("${env.REPO_DIR}") {
           powershell '''
             $ErrorActionPreference = "Stop"
             $tests = Get-ChildItem -Recurse -Filter *.csproj | Where-Object { $_.FullName -match '(?i)test|tests' }
             if ($tests) {
               foreach ($t in $tests) {
+                Write-Host "Running tests in $($t.FullName)"
                 dotnet test $t.FullName -c $env:CONFIG --no-build --logger "trx;LogFileName=TestResults.trx"
               }
-            } else { Write-Host "No tests found." }
+            } else {
+              Write-Host "No tests found."
+            }
           '''
         }
       }
-      post { always { junit allowEmptyResults: true, testResults: '**/TestResults/*.xml' } }
-    }
-
-  stage('Publish & Package') {
-  steps {
-    dir("${env.BUILD_DIR}\\repo") {
-      powershell '''
-        $ErrorActionPreference = "Stop"
-
-        $base   = Join-Path (Get-Location) "$env:PROJECT_REL"
-        $proj   = Get-ChildItem -Path $base -Recurse -Filter *.csproj | Select-Object -First 1
-        if (-not $proj) { throw 'No .csproj found for publish.' }
-
-        $projDir = Split-Path -Parent $proj.FullName
-        Set-Location $projDir
-
-        if (Test-Path "$env:PUBLISH_DIR") { Remove-Item -Recurse -Force "$env:PUBLISH_DIR" }
-        dotnet publish "$($proj.FullName)" -c $env:CONFIG -o "$env:PUBLISH_DIR" --no-restore
-
-        Set-Location "$env:PUBLISH_DIR"
-        if (-not (Get-ChildItem -Filter *.dll)) { throw 'No DLLs in publish output; publish likely failed.' }
-
-        $zip = Join-Path "$env:BUILD_DIR" "$env:ARTIFACT_ZIP"
-        if (Test-Path $zip) { Remove-Item -Force $zip }
-        Compress-Archive -Path * -DestinationPath $zip
-        Write-Host "Packaged: $zip"
-      '''
-    }
-  }
-}
-
-
-
-  stage('Upload to S3') {
-  steps {
-    withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: params.AWS_CREDS_ID]]) {
-      dir("${env.BUILD_DIR}") {
-        powershell '''
-          $ErrorActionPreference = "Stop"
-          aws --version
-          if (!(Test-Path "$env:ARTIFACT_ZIP")) { throw 'Artifact zip missing.' }
-          aws s3 cp "$env:ARTIFACT_ZIP" "s3://$env:S3_BUCKET/$env:S3_KEY" --region $env:AWS_REGION --only-show-errors
-        '''
+      post {
+        always {
+          // Dotnet produces .trx; keep as artifact for now
+          archiveArtifacts artifacts: '**/TestResults/*.trx', allowEmptyArchive: true
+        }
       }
     }
-  }
-}
 
+    stage('Publish & Package') {
+      steps {
+        dir("${env.REPO_DIR}") {
+          powershell '''
+            $ErrorActionPreference = "Stop"
 
-  stage('Deploy via SSM (script from repo)') {
-  steps {
-    withCredentials([
-      [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: params.AWS_CREDS_ID],
-      string(credentialsId: "${params.MYSQL_APP_PASSWORD_CRED_ID}", variable: 'MYSQL_APP_PASSWORD')
-    ]) {
-      dir("${env.BUILD_DIR}\\repo\\${params.PROJECT_REL}") {
-        powershell '''
-          $ErrorActionPreference = 'Stop'
-          $script = Join-Path (Get-Location) 'deploy-api-ssm.ps1'
-          if (!(Test-Path $script)) { throw "deploy-api-ssm.ps1 not found at $script" }
+            # Resolve base same logic as build
+            $base = Join-Path (Get-Location) "$env:PROJECT_REL"
+            if (!(Test-Path $base)) {
+              $slnAtRoot = Get-ChildItem -Path (Get-Location) -Filter *.sln | Select-Object -First 1
+              if ($slnAtRoot) { $base = (Get-Location) }
+              elseif (Test-Path 'api') { $base = Join-Path (Get-Location) 'api' }
+              else { throw "Cannot resolve PROJECT_REL for publish." }
+            }
 
-          powershell -ExecutionPolicy Bypass -File "$script" `
-            -InstanceId "$env:EC2_INSTANCE_ID" `
-            -Region     "$env:AWS_REGION" `
-            -Bucket     "$env:S3_BUCKET" `
-            -Key        "$env:S3_KEY" `
-            -MySQLAppPassword "$env:MYSQL_APP_PASSWORD"
-        '''
+            $proj = Get-ChildItem -Path $base -Recurse -Filter *.csproj | Select-Object -First 1
+            if (-not $proj) { throw 'No .csproj found for publish.' }
+
+            $projDir = Split-Path -Parent $proj.FullName
+            Set-Location $projDir
+
+            if (Test-Path "$env:PUBLISH_DIR") { Remove-Item -Recurse -Force "$env:PUBLISH_DIR" }
+            dotnet publish "$($proj.FullName)" -c $env:CONFIG -o "$env:PUBLISH_DIR" --no-restore
+
+            Set-Location "$env:PUBLISH_DIR"
+            if (-not (Get-ChildItem -Filter *.dll)) { throw 'No DLLs in publish output.' }
+
+            $zip = Join-Path "$env:BUILD_DIR" "$env:ARTIFACT_ZIP"
+            if (Test-Path $zip) { Remove-Item -Force $zip }
+            Compress-Archive -Path * -DestinationPath $zip
+            Write-Host "Packaged: $zip"
+          '''
+        }
+        archiveArtifacts artifacts: "${env.ARTIFACT_ZIP}", onlyIfSuccessful: true
       }
     }
-  }
-}
 
+    stage('Upload to S3') {
+      steps {
+        withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: params.AWS_CREDS_ID]]) {
+          dir("${env.BUILD_DIR}") {
+            powershell '''
+              $ErrorActionPreference = "Stop"
+              aws --version
+              if (!(Test-Path "$env:ARTIFACT_ZIP")) { throw 'Artifact zip missing.' }
+              aws s3 cp "$env:ARTIFACT_ZIP" "s3://$env:S3_BUCKET/$env:S3_KEY" --region $env:AWS_REGION --only-show-errors
+            '''
+          }
+        }
+      }
+    }
+
+    stage('Deploy via SSM (script from repo)') {
+      steps {
+        withCredentials([
+          [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: params.AWS_CREDS_ID],
+          string(credentialsId: "${params.MYSQL_APP_PASSWORD_CRED_ID}", variable: 'MYSQL_APP_PASSWORD') // Secret Text (prod)
+        ]) {
+          dir("${env.REPO_DIR}\\${params.PROJECT_REL}") {
+            powershell '''
+              $ErrorActionPreference = 'Stop'
+
+              # If PROJECT_REL fallback changed earlier, ensure script path exists from repo root as well
+              $script = Join-Path (Get-Location) 'deploy-api-ssm.ps1'
+              if (!(Test-Path $script)) {
+                $script = Join-Path (Split-Path (Split-Path (Get-Location) -Parent) -Parent) 'deploy-api-ssm.ps1' # try repo root
+              }
+              if (!(Test-Path $script)) { throw "deploy-api-ssm.ps1 not found." }
+
+              powershell -ExecutionPolicy Bypass -File "$script" `
+                -InstanceId "$env:EC2_INSTANCE_ID" `
+                -Region     "$env:AWS_REGION" `
+                -Bucket     "$env:S3_BUCKET" `
+                -Key        "$env:S3_KEY" `
+                -MySQLAppPassword "$env:MYSQL_APP_PASSWORD"
+            '''
+          }
+        }
+      }
+    }
 
     stage('Summary') {
       steps {
-        echo "Built & tested from: ${env.BUILD_DIR}"
-        echo "Uploaded ${env.ARTIFACT_ZIP} to s3://${env.S3_BUCKET}/${env.S3_KEY} (${params.AWS_REGION})"
+        echo "Built from: ${env.REPO_DIR}"
+        echo "Uploaded ${env.ARTIFACT_ZIP} to s3://${env.S3_BUCKET}/${env.S3_KEY} in ${params.AWS_REGION}"
         echo "Deployed to EC2 (SSM): ${params.EC2_INSTANCE_ID}"
       }
     }
@@ -212,11 +267,16 @@ pipeline {
 
   post {
     always {
+      // Keep fixed folder; optionally clear publish folder to reduce residue
       powershell '''
         $ErrorActionPreference = "SilentlyContinue"
-        if (Test-Path "$env:BUILD_DIR") { Remove-Item -Recurse -Force "$env:BUILD_DIR" }
+        if (Test-Path "$env:REPO_DIR\\$env:PUBLISH_DIR") {
+          Remove-Item -Recurse -Force "$env:REPO_DIR\\$env:PUBLISH_DIR"
+        }
       '''
     }
-    failure { echo "Build failed. Check console logs." }
+    failure {
+      echo "Build failed. Check console logs."
+    }
   }
 }
