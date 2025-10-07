@@ -61,7 +61,6 @@ pipeline {
       steps {
         ws("${env.FORCED_WS}") {
           dir("${params.APP_REL_PATH}") {
-            // Ensure devDependencies for Vite/webpack tooling
             withEnv(['NODE_ENV=development','NPM_CONFIG_PRODUCTION=false']) {
               bat 'cmd /c node -v'
               bat 'cmd /c npm -v'
@@ -69,22 +68,33 @@ pipeline {
               bat 'cmd /c npm run build'
             }
 
-            // Zip build output (Vite=dist, CRA=build)
-            bat """
+            // VERIFY output exists and list it
+            bat '''
               if exist dist ( set "BUILD_DIR=dist" ) else ( set "BUILD_DIR=build" )
               for /f "tokens=* delims= " %%A in ("%BUILD_DIR%") do set "BUILD_DIR=%%~A"
               echo BUILD_DIR=[%BUILD_DIR%]
               if not exist "%BUILD_DIR%" ( echo ERROR: No dist/ or build/ folder.& exit /b 2 )
+              echo --- TREE of build output ---
+              dir /s /b "%BUILD_DIR%"
+            '''
+
+            // Zip safely
+            bat '''
               if exist web.zip del /q web.zip
               powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-                "$bd = $env:BUILD_DIR.Trim(); Compress-Archive -Path (Join-Path $bd '*') -DestinationPath web.zip -Force"
+                "$bd = $env:BUILD_DIR.Trim(); if(!(Test-Path $bd)){throw \\"Build dir not found: $bd\\"}; Compress-Archive -Path (Join-Path $bd '*') -DestinationPath web.zip -Force"
+              if not exist web.zip ( echo ERROR: web.zip not created.& exit /b 3 )
+              echo --- ZIP created ---
               dir web.zip
-            """
+            '''
+
+            // Archive relative to current dir (no subpath)
             archiveArtifacts artifacts: 'web.zip', fingerprint: true
           }
         }
       }
     }
+
 
     stage('Upload web.zip to S3') {
       steps {
@@ -92,7 +102,9 @@ pipeline {
           withCredentials([[$class:'AmazonWebServicesCredentialsBinding', credentialsId:'aws_secrets_shankar']]) {
             dir("${params.APP_REL_PATH}") {
               script {
+                bat 'if not exist web.zip (echo ERROR: web.zip missing before S3 upload.& exit /b 4)'
                 def key = "web/${params.APP_NAME}-${env.BUILD_NUMBER}.zip"
+                bat "aws --version"
                 bat "aws s3 cp web.zip s3://${params.ARTIFACT_BUCKET}/${key} --region ${params.AWS_REGION}"
                 env.S3_KEY = key
                 echo "Uploaded: s3://${params.ARTIFACT_BUCKET}/${key}"
@@ -102,6 +114,7 @@ pipeline {
         }
       }
     }
+
 
     stage('Deploy both (web + api) to IIS via SSM') {
       when { expression { return params.EC2_INSTANCE_ID?.trim() } }
