@@ -70,47 +70,49 @@ pipeline {
       }
     }
 
-    stage('Restore & Build (local validation)') {
-  steps {
-    dir("${env.BUILD_DIR}\\repo") {
-      powershell """
-        $ErrorActionPreference = 'Stop'
+  stage('Restore & Build (local validation)') {
+    steps {
+      dir("${env.BUILD_DIR}\\repo") {
+        powershell '''
+          $ErrorActionPreference = "Stop"
 
-        # 0) Show where we are + helpful listing
-        Write-Host "Repo root: $(Get-Location)"
-        Write-Host "PROJECT_REL: ${params.PROJECT_REL}"
-        if (!(Test-Path '${params.PROJECT_REL}')) {
-          Write-Host 'Contents of repo root:'; Get-ChildItem -Force
-          throw 'PROJECT_REL path does not exist. Fix the parameter so it points under the repo root.'
-        }
+          # 0) Show where we are + helpful listing
+          Write-Host "Repo root: $((Get-Location).Path)"
+          Write-Host "PROJECT_REL: ${env:PROJECT_REL}"
+          if (!(Test-Path "${env:PROJECT_REL}")) {
+            Write-Host 'Contents of repo root:'
+            Get-ChildItem -Force
+            throw 'PROJECT_REL path does not exist. Fix the parameter so it points under the repo root.'
+          }
 
-        $base = Join-Path (Get-Location) '${params.PROJECT_REL}'
+          $base = Join-Path (Get-Location) "${env:PROJECT_REL}"
 
-        # 1) Find a solution or project inside PROJECT_REL (prefer .sln)
-        $sln = Get-ChildItem -Path $base -Recurse -Filter *.sln | Select-Object -First 1
-        $csproj = $null
-        if (-not $sln) {
-          $csproj = Get-ChildItem -Path $base -Recurse -Filter *.csproj | Select-Object -First 1
-        }
+          # 1) Find a solution or project inside PROJECT_REL (prefer .sln)
+          $sln = Get-ChildItem -Path $base -Recurse -Filter *.sln | Select-Object -First 1
+          $csproj = $null
+          if (-not $sln) {
+            $csproj = Get-ChildItem -Path $base -Recurse -Filter *.csproj | Select-Object -First 1
+          }
 
-        if ($sln) {
-          Write-Host "Using solution: $($sln.FullName)"
-          dotnet --info
-          dotnet restore "$($sln.FullName)"
-          dotnet build "$($sln.FullName)" -c ${params.CONFIG} --no-restore
-        } elseif ($csproj) {
-          Write-Host "Using project: $($csproj.FullName)"
-          dotnet --info
-          dotnet restore "$($csproj.FullName)"
-          dotnet build "$($csproj.FullName)" -c ${params.CONFIG} --no-restore
-        } else {
-          Write-Host "Listing of PROJECT_REL:"; Get-ChildItem -Recurse -Force -Path $base
-          throw 'No .sln or .csproj found under PROJECT_REL. Adjust PROJECT_REL to the folder that contains your .sln/.csproj.'
-        }
-      """
+          if ($sln) {
+            Write-Host "Using solution: $($sln.FullName)"
+            dotnet --info
+            dotnet restore "$($sln.FullName)"
+            dotnet build "$($sln.FullName)" -c ${env:CONFIG} --no-restore
+          } elseif ($csproj) {
+            Write-Host "Using project: $($csproj.FullName)"
+            dotnet --info
+            dotnet restore "$($csproj.FullName)"
+            dotnet build "$($csproj.FullName)" -c ${env:CONFIG} --no-restore
+          } else {
+            Write-Host "Listing of PROJECT_REL:"; Get-ChildItem -Recurse -Force -Path $base
+            throw 'No .sln or .csproj found under PROJECT_REL. Adjust PROJECT_REL to the folder that contains your .sln/.csproj.'
+          }
+        '''
+      }
     }
   }
-}
+
 
 
     stage('Test') {
