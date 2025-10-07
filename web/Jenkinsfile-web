@@ -34,11 +34,19 @@ pipeline {
       steps {
         ws("${env.FORCED_WS}") {
           dir("${params.APP_REL_PATH}") {
-            bat 'cmd /c node -v'
-            bat 'cmd /c npm -v'
-            bat 'cmd /c if exist package-lock.json (npm ci) else (npm install)'
-            bat 'cmd /c npm run build'
+            // Force devDeps install for the build (Vite lives in devDependencies)
+            withEnv(['NODE_ENV=development', 'NPM_CONFIG_PRODUCTION=false']) {
+              bat 'cmd /c node -v'
+              bat 'cmd /c npm -v'
 
+              // Prefer ci if lockfile exists; ensure dev deps are included
+              bat 'cmd /c if exist package-lock.json (npm ci --include=dev) else (npm install)'
+
+              // Run the package script (will find local vite now)
+              bat 'cmd /c npm run build'
+            }
+
+            // Detect output dir (vite=dist, CRA=build), then zip it
             bat '''
               if exist dist ( set BUILD_DIR=dist ) else ( set BUILD_DIR=build )
               echo BUILD_DIR=%BUILD_DIR%
@@ -53,7 +61,8 @@ pipeline {
           }
         }
       }
-    }
+   }
+
 
     stage('Upload to S3') {
       steps {
