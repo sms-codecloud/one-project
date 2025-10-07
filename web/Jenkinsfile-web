@@ -13,21 +13,18 @@ pipeline {
 
   environment {
     NODE_ENV = "${params.NODE_MODE}"
-    // Keep Node and AWS CLI on PATH (AWSCLIV2 typical Windows install path)
-    PATH = "C:\\Program Files\\nodejs;C:\\Program Files\\Amazon\\AWSCLIV2;${env:PATH}"
-    // Force the job to use this absolute workspace
+    // ✅ Use Groovy env var syntax, not PowerShell:
+    PATH = "C:\\Program Files\\nodejs;C:\\Program Files\\Amazon\\AWSCLIV2;${env.PATH}"
+    // Ensure this is always defined:
     FORCED_WS = 'D:\\jenkins-workspace\\workspace'
   }
 
   stages {
     stage('Prepare Workspace & Checkout') {
       steps {
-        // Force Jenkins to operate in the exact directory you want
         ws("${env.FORCED_WS}") {
-          // fully wipe the directory so each run overwrites previous clone/build
           deleteDir()
           checkout scm
-          // show where we are (useful for debugging)
           bat 'cd & dir /b'
         }
       }
@@ -37,34 +34,21 @@ pipeline {
       steps {
         ws("${env.FORCED_WS}") {
           dir("${params.APP_REL_PATH}") {
-            // Use cmd to avoid PowerShell execution policy on npm.ps1
             bat 'cmd /c node -v'
             bat 'cmd /c npm -v'
-
-            // Prefer "ci" if lockfile exists, else "install"
             bat 'cmd /c if exist package-lock.json (npm ci) else (npm install)'
-            // CRA uses "build"; Vite often uses "build" too. Let package.json decide.
             bat 'cmd /c npm run build'
 
-            // Detect build output folder (dist or build)
             bat '''
-              if exist dist (
-                set BUILD_DIR=dist
-              ) else (
-                set BUILD_DIR=build
-              )
+              if exist dist ( set BUILD_DIR=dist ) else ( set BUILD_DIR=build )
               echo BUILD_DIR=%BUILD_DIR%
               if not exist %BUILD_DIR% (
                 echo ERROR: No dist/ or build/ output folder found.& exit /b 2
               )
-
-              rem Zip the built static files
               powershell -NoProfile -ExecutionPolicy Bypass -Command ^
                 "Compress-Archive -Path $env:BUILD_DIR\\* -DestinationPath web.zip -Force"
-
               dir web.zip
             '''
-
             archiveArtifacts artifacts: "${params.APP_REL_PATH}\\web.zip", fingerprint: true
           }
         }
@@ -77,7 +61,6 @@ pipeline {
           withCredentials([[$class:'AmazonWebServicesCredentialsBinding', credentialsId:'aws_secrets_shankar']]) {
             dir("${params.APP_REL_PATH}") {
               script {
-                // create a nice key with build number
                 def key = "web/${params.APP_NAME}-${env.BUILD_NUMBER}.zip"
                 bat "aws s3 cp web.zip s3://${params.ARTIFACT_BUCKET}/${key} --region ${params.AWS_REGION}"
                 env.S3_KEY = key
@@ -95,12 +78,10 @@ pipeline {
         ws("${env.FORCED_WS}") {
           withCredentials([[$class:'AmazonWebServicesCredentialsBinding', credentialsId:'aws_secrets_shankar']]) {
             script {
-              // PowerShell to run on the EC2 (Windows)
               def ps = """
                 \$ErrorActionPreference = 'Stop'
                 aws --version | Out-Null
 
-                # --- Inputs from Jenkins ---
                 \$bucket='${params.ARTIFACT_BUCKET}'
                 \$key='${env.S3_KEY}'
                 \$zip='C:\\\\deploy\\\\incoming\\\\web.zip'
@@ -108,21 +89,17 @@ pipeline {
                 \$siteRoot='C:\\\\deploy\\\\web'
                 \$siteName='one-project'
 
-                # Ensure folders
                 New-Item -ItemType Directory -Force -Path (Split-Path \$zip) | Out-Null
                 New-Item -ItemType Directory -Force -Path \$siteRoot | Out-Null
 
-                # Fetch artifact
                 if (Test-Path \$zip) { Remove-Item \$zip -Force }
-                aws s3 cp \"s3://\$bucket/\$key\" \$zip --region ${params.AWS_REGION}
+                aws s3 cp "s3://\$bucket/\$key" \$zip --region ${params.AWS_REGION}
 
-                # Unzip fresh
                 if (Test-Path \$temp) { Remove-Item \$temp -Recurse -Force }
                 New-Item -ItemType Directory -Force -Path \$temp | Out-Null
                 Add-Type -AssemblyName System.IO.Compression.FileSystem
                 [System.IO.Compression.ZipFile]::ExtractToDirectory(\$zip, \$temp)
 
-                # IIS swap
                 Import-Module WebAdministration
                 if (Get-Website -Name \$siteName -ErrorAction SilentlyContinue) {
                   Stop-WebSite -Name \$siteName -ErrorAction SilentlyContinue
@@ -134,19 +111,17 @@ pipeline {
                   New-Item -ItemType Directory -Force -Path \$siteRoot | Out-Null
                 }
 
-                Copy-Item \"\$temp\\*\" \$siteRoot -Recurse -Force
+                Copy-Item "\$temp\\*" \$siteRoot -Recurse -Force
 
                 if (Get-Website -Name \$siteName -ErrorAction SilentlyContinue) {
                   Start-WebSite -Name \$siteName
                 } else {
-                  # Optional: create site if it doesn't exist (comment out if you create it via infra)
                   New-Website -Name \$siteName -PhysicalPath \$siteRoot -Port 80 -Force
                 }
 
-                Write-Host \"Deployed static site to \$siteRoot\"
+                Write-Host "Deployed static site to \$siteRoot"
               """
 
-              // Send SSM command
               bat """
                 aws ssm send-command ^
                   --instance-ids ${params.EC2_INSTANCE_ID} ^
