@@ -1,85 +1,205 @@
-# ======================
-# Global OS / Editor junk
-# ======================
+# ==========================
+# GLOBAL / COMMON
+# ==========================
 .DS_Store
 Thumbs.db
-desktop.ini
+*.log
+*.tmp
+*.bak
 *.swp
 *.swo
-*.bak
-*.tmp
-*.log
-*.lock
+*.orig
+*.rej
+*.patch
+*.backup
+*~
+!.env.example
 
-# IDEs
+# Node, Dotnet, Terraform build caches and IDE settings
+node_modules/
+dist/
+build/
+bin/
+obj/
 .vscode/
 .idea/
-*.iml
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
 
-# ======================
-# Terraform
-# ======================
-terraform/.terraform/
-terraform/.terraform.lock.hcl
-terraform/*.tfstate
-terraform/*.tfstate.*
-terraform/tfplan
-terraform/tf-outputs.json
+# ==========================
+# REACT / VITE FRONTEND (ui or web/)
+# ==========================
+# Dependency directories
+/web/node_modules/
+/web/.parcel-cache/
+/web/.cache/
+/web/.next/
+/web/.turbo/
+/web/dist/
+/web/build/
+# Logs
+/web/npm-debug.log*
+/web/yarn-debug.log*
+/web/yarn-error.log*
+/web/pnpm-debug.log*
+# Environment and local settings
+/web/.env*
+# Lockfiles if you use a specific package manager — keep one, ignore others
+# Uncomment only the one you DON'T use
+# /web/package-lock.json
+# /web/yarn.lock
+# /web/pnpm-lock.yaml
+
+# ==========================
+# DOTNET BACKEND (api/)
+# ==========================
+**/bin/
+**/obj/
+**/publish/
+node_modules/
+build/
+dist/
+**/*.zip
+
+/api/bin/
+/api/obj/
+/api/publish/
+/api/TestResults/
+/api/.vs/
+/api/.vscode/
+# NuGet
+*.nupkg
+*.snupkg
+.nuget/
+packages/
+/api/project.lock.json
+/project.lock.json
+# IIS Express / local dev artifacts
+/.vs/
+/api/.vs/
+/api/.vs/*
+/api/.vscode/*
+/api/.vsconfig
+# User secrets
+/appsettings.*.local.json
+appsettings.*.local.json
+/appsettings.Development.json
+
+# Logs / temp data
+/api/logs/
+/api/Logs/
+/api/*.log
+*.db
+*.sqlite
+*.mdf
+*.ldf
+
+# ==========================
+# TERRAFORM (infra/)
+# ==========================
+.terraform/
+*.tfstate
+*.tfstate.*
 crash.log
+crash.*.log
 override.tf
 override.tf.json
 *_override.tf
 *_override.tf.json
+.terraformrc
+terraform.rc
 
-# ======================
-# .NET Core / ASP.NET API
-# ======================
-api/bin/
-api/obj/
-api/**/*.user
-api/**/*.suo
-api/**/*.userosscache
-api/**/*.sln.docstates
 
-# Build output
-api/api-publish/
+/infra/.terraform/
+/infra/.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.auto.tfvars
+*.tfvars.json
+*.backup
+terraform.tfstate*
+crash.log
+override.tf
+override.tf.json
+*.plan
+terraform.tfplan
+*.tfplan.json
+# Local environment templates (keep example files)
+!/infra/*.tfvars.example
 
-# Visual Studio
-.vs/
+# ==========================
+# JENKINS / DEPLOYMENT
+# ==========================
+/**/publish/
+/**/student-api.zip
+/deploy/
+/artifacts/
+/tmp/
+/workspace/
+/*.zip
+/*.tar
+/*.gz
+/*.7z
 
-# Resharper / Rider
-_ReSharper*/
-*.[Rr]e[Ss]harper
-*.DotSettings.user
+# Jenkins pipeline temporary files
+**/@tmp/
+**/@logs/
+**/@script/
+**/@script/**/
+**/@workspace/
+**/@workspace/**/
+**/.jenkinsfile
+**/.jenkinsfile/*
+*.trx
+*.coverage
+*.coveragexml
+coverage-report/
 
-# ======================
-# React (Vite) frontend
-# ======================
-web/node_modules/
-web/dist/
-web/.vite/
-web/package-lock.json
-web/yarn.lock
-web/pnpm-lock.yaml
+# ==========================
+# AWS / CLOUD / CREDENTIALS
+# ==========================
+# NEVER commit real credentials or AWS config
+*.pem
+*.ppk
+*.key
+*.crt
+*.csr
+*.cer
+*.der
+*.pfx
+*.secrets.json
+aws_credentials
+aws_config
+aws_secrets_*
+*.tfvars
+**/terraform.tfstate*
+.env
+.env.local
+.env.*.local
 
-# Log files
-web/npm-debug.log*
-web/yarn-debug.log*
-web/yarn-error.log*
+# ==========================
+# MISC
+# ==========================
+/*.bak
+/*.old
+*.zip
+*.7z
+*.tar.gz
+*.tgz
+*.rar
+*.gzip
 
-# ======================
-# Jenkins artifacts
-# ======================
-deploy_pkg/
-deploy.zip
-
-# Jenkins workspace metadata (just in case)
-*.jenkinsfile.bak
-*.jenkinsfile.old
-
-# ======================
-# SQL Server local files (if you run dev DB locally)
-# ======================
-*.mdf
-*.ldf
-*.ndf
+# ==========================
+# KEEP HELPFUL FILES
+# ==========================
+!.env.example
+!/README.md
+!/LICENSE
+!**/package.json
+!**/package-lock.json
+!**/*.sln
+!**/*.csproj
+!**/*.tf
