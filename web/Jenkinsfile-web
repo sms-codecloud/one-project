@@ -233,38 +233,45 @@ Write-Host "✓ Deployed web to \$siteRoot and API to \$apiRoot under site '\$si
               def json    = '{"commands":["' + escaped.join('","') + '"]}'
               writeFile file: 'params_both.json', text: json
 
-              // Send command & capture CommandId
+              // --- Send command & capture only the CommandId (no echo noise) ---
               def cmdId = bat(
                 returnStdout: true,
                 script: """
-                  aws ssm send-command ^
+                  @echo off
+                  for /f "usebackq delims=" %%I in (`aws ssm send-command ^
                     --instance-ids ${params.EC2_INSTANCE_ID} ^
                     --document-name AWS-RunPowerShellScript ^
                     --parameters file://params_both.json ^
                     --region ${params.AWS_REGION} ^
                     --cli-binary-format raw-in-base64-out ^
-                    --query "Command.CommandId" --output text
+                    --query "Command.CommandId" --output text`) do (
+                    echo %%I
+                  )
                 """
               ).trim()
               echo "SSM CommandId=${cmdId}"
 
-              // Poll status
+              // --- Poll status until terminal state ---
               String status = ''
               int maxLoops = 60
               for (int i = 0; i < maxLoops; i++) {
                 status = bat(
                   returnStdout: true,
-                  script: "aws ssm list-commands --command-id ${cmdId} --region ${params.AWS_REGION} --query \"Commands[0].Status\" --output text"
+                  script: """
+                    @echo off
+                    aws ssm list-commands --command-id ${cmdId} --region ${params.AWS_REGION} --query "Commands[0].Status" --output text
+                  """
                 ).trim()
                 echo "SSM status: ${status}"
                 if (['Success','Failed','TimedOut','Cancelled'].contains(status)) break
                 sleep time: 5, unit: 'SECONDS'
               }
 
-              // Fetch output
+              // --- Fetch stdout/stderr from the invocation ---
               def ssmOut = bat(
                 returnStdout: true,
                 script: """
+                  @echo off
                   aws ssm get-command-invocation ^
                     --command-id ${cmdId} ^
                     --instance-id ${params.EC2_INSTANCE_ID} ^
@@ -275,6 +282,7 @@ Write-Host "✓ Deployed web to \$siteRoot and API to \$apiRoot under site '\$si
               def ssmErr = bat(
                 returnStdout: true,
                 script: """
+                  @echo off
                   aws ssm get-command-invocation ^
                     --command-id ${cmdId} ^
                     --instance-id ${params.EC2_INSTANCE_ID} ^
@@ -289,7 +297,6 @@ Write-Host "✓ Deployed web to \$siteRoot and API to \$apiRoot under site '\$si
               if (status != 'Success') {
                 error "SSM command ${cmdId} completed with status=${status}"
               }
-            }
           }
         }
       }
