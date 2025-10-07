@@ -64,7 +64,7 @@ pipeline {
 
               dir web.zip
             '''
-            archiveArtifacts artifacts: "${params.APP_REL_PATH}\\web.zip", fingerprint: true
+            archiveArtifacts artifacts: 'web.zip', fingerprint: true
           }
         }
       }
