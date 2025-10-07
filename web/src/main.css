@@ -1,0 +1,128 @@
+/* :root {
+  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  color-scheme: light dark;
+  color: rgba(255, 255, 255, 0.87);
+  background-color: #242424;
+} */
+
+a {
+  color: #0066cc;
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  font-size: 14px;
+  color: #333;
+}
+
+th,
+td {
+  padding: 10px 12px;
+  border: 1px solid #ddd;
+  text-align: left;
+}
+
+th {
+  background-color: #f0f0f0;
+  font-weight: 600;
+  color: #222;
+}
+
+td:nth-child(1) {
+  width: 40%;
+  font-weight: 500;
+  color: #444;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Zebra striping */
+tr:nth-child(even) {
+  background-color: #f9f9f9;
+}
+
+tr:nth-child(odd) {
+  background-color: #ffffff;
+}
+
+/* Row hover effect */
+tr:hover {
+  background-color: #dfeffc;
+  transition: background-color 0.2s ease-in-out;
+}
+
+th:last-child,
+td:last-child {
+  width: 100px; /* Adjust this value as needed */
+  white-space: nowrap;
+}
+
+.action-icons {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.add-user-btn {
+  background-color: #007bff;
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 600;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.15);
+  transition: all 0.3s ease;
+}
+
+.add-user-btn:hover {
+  background-color: #0056b3;
+  transform: translateY(-1px);
+}
+
+textarea {
+  width: 100%;
+  padding: 10px;
+  font-size: 15px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  box-sizing: border-box;
+  resize: none;
+}
+
+.error {
+  border: 2px solid red;
+}
+
+.error-text {
+  color: red;
+  font-size: 14px;
+}
+
+.asterisk {
+  color: red;
+}
+
+.btn {
+  padding: "8px 16px";
+  border-radius: 4;
+  border: "none";
+  font-size: "14px";
+  cursor: "pointer";
+  font-weight: "bold";
+}
+
+.cancelBtn {
+  background-color: "#ccc";
+  color: "#333";
+}
