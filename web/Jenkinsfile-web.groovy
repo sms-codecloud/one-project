@@ -5,7 +5,7 @@ pipeline {
   parameters {
     // AWS & infra
     string( name: 'AWS_REGION',        defaultValue: 'ap-south-1',   description: 'AWS region' )
-    string( name: 'EC2_INSTANCE_ID',   defaultValue: '',             description: 'Target Windows EC2 instance ID' )
+    string( name: 'EC2_INSTANCE_ID',   defaultValue: 'i-0654aed058988e693', description: 'Target Windows EC2 instance ID' )
     string( name: 'ARTIFACT_BUCKET',   defaultValue: 'arj-bootcamp', description: 'S3 bucket for deploy artifacts (web.zip & api.zip)' )
 
     // App layout
@@ -14,10 +14,10 @@ pipeline {
     choice( name: 'NODE_MODE',         choices: ['production','development'], description: 'Runtime NODE_ENV (build forces dev for tooling)' )
 
     // Wiring frontend to backend (optional)
-    string( name: 'API_BASE_URL',      defaultValue: '',             description: 'Optional API base URL exposed to React (e.g., http://localhost/api)' )
+    string( name: 'API_BASE_URL',      defaultValue: 'ec2-52-66-89-128.ap-south-1.compute.amazonaws.com/api',             description: 'Optional API base URL exposed to React (e.g., http://localhost/api)' )
 
     // API artifact key (from API pipeline)
-    string( name: 'API_S3_KEY',        defaultValue: '',             description: 'S3 key of api.zip from API pipeline (e.g., api/student-api-42.zip)' )
+    string( name: 'API_S3_KEY',        defaultValue: 'api/student-api-11.zip', description: 'S3 key of api.zip from API pipeline (e.g., api/student-api-42.zip)' )
 
     // IIS configuration
     string( name: 'IIS_SITE_NAME',     defaultValue: 'one-project',  description: 'IIS site name' )
@@ -79,13 +79,14 @@ pipeline {
             '''
 
             // Zip safely
-            bat """
+            bat '''
               @echo off
               if exist web.zip del /q web.zip
-              powershell -NoProfile -ExecutionPolicy Bypass -Command "$bd = if (Test-Path 'dist') { 'dist' } elseif (Test-Path 'build') { 'build' } else { \$null }; if (-not \$bd) { throw 'No dist/ or build/ folder found.' }; Compress-Archive -Path (Join-Path \$bd '*') -DestinationPath 'web.zip' -Force"
+              powershell -NoProfile -ExecutionPolicy Bypass -Command "$bd = if (Test-Path 'dist') { 'dist' } elseif (Test-Path 'build') { 'build' } else { $null }; if (-not $bd) { throw 'No dist/ or build/ folder found.' }; Compress-Archive -Path (Join-Path $bd '*') -DestinationPath 'web.zip' -Force"
               if not exist web.zip ( echo ERROR: web.zip not created.& exit /b 3 )
               dir web.zip
-            """
+            '''
+
 
             // Archive relative to current dir (no subpath)
             archiveArtifacts artifacts: 'web.zip', fingerprint: true
