@@ -79,17 +79,13 @@ pipeline {
             '''
 
             // Zip safely
-            bat '''
+            bat """
               @echo off
               if exist web.zip del /q web.zip
-              powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-                "$bd = if (Test-Path 'dist') { 'dist' } elseif (Test-Path 'build') { 'build' } else { $null }; ^
-                if (-not $bd) { throw 'No dist/ or build/ folder found.' }; ^
-                Compress-Archive -Path (Join-Path $bd '*') -DestinationPath 'web.zip' -Force"
+              powershell -NoProfile -ExecutionPolicy Bypass -Command "$bd = if (Test-Path 'dist') { 'dist' } elseif (Test-Path 'build') { 'build' } else { \$null }; if (-not \$bd) { throw 'No dist/ or build/ folder found.' }; Compress-Archive -Path (Join-Path \$bd '*') -DestinationPath 'web.zip' -Force"
               if not exist web.zip ( echo ERROR: web.zip not created.& exit /b 3 )
               dir web.zip
-            '''
-
+            """
 
             // Archive relative to current dir (no subpath)
             archiveArtifacts artifacts: 'web.zip', fingerprint: true
