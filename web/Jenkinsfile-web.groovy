@@ -4,7 +4,7 @@ pipeline {
 
   parameters {
     string( name: 'AWS_REGION', defaultValue: 'ap-south-1', description: 'AWS region' )
-    string( name: 'EC2_INSTANCE_ID', defaultValue: 'i-12345678901234', description: 'EC2 instance ID' )
+    string( name: 'EC2_INSTANCE_ID', defaultValue: 'i-0654aed058988e693', description: 'EC2 instance ID' )
     string( name: 'ARTIFACT_BUCKET', defaultValue: 'arj-bootcamp', description: 'S3 bucket for deploy artifacts' )
     string( name: 'APP_REL_PATH', defaultValue: 'web', description: 'Relative path to React app folder' )
     string( name: 'APP_NAME', defaultValue: 'student-web', description: 'Bundle name prefix' )
