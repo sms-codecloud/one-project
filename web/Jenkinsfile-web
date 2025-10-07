@@ -94,100 +94,64 @@ pipeline {
         ws("${env.FORCED_WS}") {
           withCredentials([[$class:'AmazonWebServicesCredentialsBinding', credentialsId:'aws_secrets_shankar']]) {
             script {
+              // --- 1) PowerShell to run on the EC2 Windows host ---
+              // Use a GString so Jenkins interpolates your params/vars, but keep $ for PowerShell by escaping as \$
               def ps = """
-                \$ErrorActionPreference = 'Stop'
-                aws --version | Out-Null
-
-                \$bucket='${params.ARTIFACT_BUCKET}'
-                \$key='${env.S3_KEY}'
-                \$zip='C:\\\\deploy\\\\incoming\\\\web.zip'
-                \$temp='C:\\\\deploy\\\\incoming\\\\web_unzip'
-                \$siteRoot='C:\\\\deploy\\\\web'
-                \$siteName='one-project'
-
-                New-Item -ItemType Directory -Force -Path (Split-Path \$zip) | Out-Null
-                New-Item -ItemType Directory -Force -Path \$siteRoot | Out-Null
-
-                if (Test-Path \$zip) { Remove-Item \$zip -Force }
-                aws s3 cp "s3://\$bucket/\$key" \$zip --region ${params.AWS_REGION}
-
-                if (Test-Path \$temp) { Remove-Item \$temp -Recurse -Force }
-                New-Item -ItemType Directory -Force -Path \$temp | Out-Null
-                Add-Type -AssemblyName System.IO.Compression.FileSystem
-                [System.IO.Compression.ZipFile]::ExtractToDirectory(\$zip, \$temp)
-
-                Import-Module WebAdministration
-                if (Get-Website -Name \$siteName -ErrorAction SilentlyContinue) {
-                  Stop-WebSite -Name \$siteName -ErrorAction SilentlyContinue
-                }
-
-                if (Test-Path \$siteRoot) {
-                  Get-ChildItem -Path \$siteRoot -Force | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-                } else {
-                  New-Item -ItemType Directory -Force -Path \$siteRoot | Out-Null
-                }
-
-                Copy-Item "\$temp\\*" \$siteRoot -Recurse -Force
-
-                if (Get-Website -Name \$siteName -ErrorAction SilentlyContinue) {
-                  Start-WebSite -Name \$siteName
-                } else {
-                  New-Website -Name \$siteName -PhysicalPath \$siteRoot -Port 80 -Force
-                }
-
-                Write-Host "Deployed static site to \$siteRoot"
-              """
-
-              bat '''
-                del /q params.json 2>nul
-
-                powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-                  "$ps = @'
-              $ErrorActionPreference = 'Stop'
+              \$ErrorActionPreference = 'Stop'
               aws --version | Out-Null
 
-              $bucket='${params.ARTIFACT_BUCKET}'
-              $key='${env.S3_KEY}'
-              $zip='C:\\deploy\\incoming\\web.zip'
-              $temp='C:\\deploy\\incoming\\web_unzip'
-              $siteRoot='C:\\deploy\\web'
-              $siteName='one-project'
+              \$bucket='${params.ARTIFACT_BUCKET}'
+              \$key='${env.S3_KEY}'
+              \$zip='C:\\\\deploy\\\\incoming\\\\web.zip'
+              \$temp='C:\\\\deploy\\\\incoming\\\\web_unzip'
+              \$siteRoot='C:\\\\deploy\\\\web'
+              \$siteName='one-project'
 
-              New-Item -ItemType Directory -Force -Path (Split-Path $zip) | Out-Null
-              New-Item -ItemType Directory -Force -Path $siteRoot | Out-Null
+              # Ensure folders
+              New-Item -ItemType Directory -Force -Path (Split-Path \$zip) | Out-Null
+              New-Item -ItemType Directory -Force -Path \$siteRoot | Out-Null
 
-              if (Test-Path $zip) { Remove-Item $zip -Force }
-              aws s3 cp \\"s3://$bucket/$key\\" $zip --region ${params.AWS_REGION}
+              # Fetch artifact
+              if (Test-Path \$zip) { Remove-Item \$zip -Force }
+              aws s3 cp "s3://\$bucket/\$key" \$zip --region ${params.AWS_REGION}
 
-              if (Test-Path $temp) { Remove-Item $temp -Recurse -Force }
-              New-Item -ItemType Directory -Force -Path $temp | Out-Null
+              # Unzip fresh
+              if (Test-Path \$temp) { Remove-Item \$temp -Recurse -Force }
+              New-Item -ItemType Directory -Force -Path \$temp | Out-Null
               Add-Type -AssemblyName System.IO.Compression.FileSystem
-              [System.IO.Compression.ZipFile]::ExtractToDirectory($zip, $temp)
+              [System.IO.Compression.ZipFile]::ExtractToDirectory(\$zip, \$temp)
 
+              # IIS swap
               Import-Module WebAdministration
-              if (Get-Website -Name $siteName -ErrorAction SilentlyContinue) {
-                Stop-WebSite -Name $siteName -ErrorAction SilentlyContinue
+              if (Get-Website -Name \$siteName -ErrorAction SilentlyContinue) {
+                Stop-WebSite -Name \$siteName -ErrorAction SilentlyContinue
               }
 
-              if (Test-Path $siteRoot) {
-                Get-ChildItem -Path $siteRoot -Force | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+              if (Test-Path \$siteRoot) {
+                Get-ChildItem -Path \$siteRoot -Force | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
               } else {
-                New-Item -ItemType Directory -Force -Path $siteRoot | Out-Null
+                New-Item -ItemType Directory -Force -Path \$siteRoot | Out-Null
               }
 
-              Copy-Item \\"$temp\\*\\" $siteRoot -Recurse -Force
+              Copy-Item "\$temp\\*" \$siteRoot -Recurse -Force
 
-              if (Get-Website -Name $siteName -ErrorAction SilentlyContinue) {
-                Start-WebSite -Name $siteName
+              if (Get-Website -Name \$siteName -ErrorAction SilentlyContinue) {
+                Start-WebSite -Name \$siteName
               } else {
-                New-Website -Name $siteName -PhysicalPath $siteRoot -Port 80 -Force
+                New-Website -Name \$siteName -PhysicalPath \$siteRoot -Port 80 -Force
               }
 
-              Write-Host \\"Deployed static site to $siteRoot\\"
-              '@; ^
-              $cmds = $ps -split '\\r?\\n'; ^
-              @{ commands = $cmds } | ConvertTo-Json -Depth 3 | Set-Content -Path params.json -Encoding ASCII"
+              Write-Host "Deployed static site to \$siteRoot"
+              """.trim()
 
+              // --- 2) Convert script to JSON for SSM {"commands":[...]} ---
+              def lines   = ps.split(/\r?\n/)
+              def escaped = lines.collect { it.replace("\\", "\\\\").replace("\"", "\\\"") }
+              def json    = '{"commands":["' + escaped.join('","') + '"]}'
+              writeFile file: 'params.json', text: json
+
+              // --- 3) Send command ---
+              bat """
                 aws ssm send-command ^
                   --instance-ids ${params.EC2_INSTANCE_ID} ^
                   --document-name AWS-RunPowerShellScript ^
@@ -195,11 +159,49 @@ pipeline {
                   --region ${params.AWS_REGION} ^
                   --cli-binary-format raw-in-base64-out ^
                   --query "Command.CommandId" --output text > cmdid.txt
+              """
+              def cmdId = bat(returnStdout: true, script: 'set /p X=<cmdid.txt & echo %X%').trim()
+              echo "SSM CommandId=${cmdId}"
 
-                set /p CMDID=<cmdid.txt
-                echo SSM CommandId=%CMDID%
-            '''
-              bat 'set /p CMDID=<cmdid.txt & echo SSM CommandId=%CMDID%'
+              // --- 4) Poll status until terminal state ---
+              String status = ''
+              int maxLoops = 60   // ~5 minutes
+              for (int i = 0; i < maxLoops; i++) {
+                status = bat(returnStdout: true, script:
+                  "aws ssm list-commands --command-id ${cmdId} --region ${params.AWS_REGION} --query \"Commands[0].Status\" --output text").trim()
+                echo "SSM status: ${status}"
+                if (['Success','Failed','TimedOut','Cancelled'].contains(status)) break
+                sleep time: 5, unit: 'SECONDS'
+              }
+
+              // --- 5) Fetch stdout/stderr from the invocation ---
+              bat """
+                aws ssm get-command-invocation ^
+                  --command-id ${cmdId} ^
+                  --instance-id ${params.EC2_INSTANCE_ID} ^
+                  --region ${params.AWS_REGION} ^
+                  --query "StandardOutputContent" --output text > ssm_out.txt
+              """
+              bat """
+                aws ssm get-command-invocation ^
+                  --command-id ${cmdId} ^
+                  --instance-id ${params.EC2_INSTANCE_ID} ^
+                  --region ${params.AWS_REGION} ^
+                  --query "StandardErrorContent" --output text > ssm_err.txt
+              """
+
+              def ssmOut = readFile('ssm_out.txt')
+              def ssmErr = readFile('ssm_err.txt')
+
+              echo "----- SSM STDOUT -----\\n${ssmOut}"
+              if (ssmErr?.trim()) {
+                echo "----- SSM STDERR -----\\n${ssmErr}"
+              }
+
+              // --- 6) Fail build if not Success ---
+              if (status != 'Success') {
+                error "SSM command ${cmdId} completed with status=${status}"
+              }
             }
           }
         }
