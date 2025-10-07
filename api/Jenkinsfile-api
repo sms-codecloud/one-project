@@ -10,7 +10,7 @@ pipeline {
     string(name: 'AWS_REGION', defaultValue: 'ap-south-1', description: 'AWS region')
     string(name: 'AWS_CREDS_ID', defaultValue: 'aws_secrets_shankar', description: 'Jenkins AWS creds ID')
     string(name: 'EC2_INSTANCE_ID', defaultValue: '', description: 'Target Windows EC2 instance id (SSM)')
-    string(name: 'MYSQL_APP_PASSWORD_CRED_ID', defaultValue: 'mysql_app_password_prod', description: 'Secret Text credential ID for MySQL app password (prod)')
+    string(name: 'MYSQL_APP_PASSWORD_CRED_ID', defaultValue: 'mysql_app_password', description: 'Secret Text credential ID for MySQL app password (prod)')
   }
 
   environment {
