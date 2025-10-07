@@ -126,119 +126,119 @@ pipeline {
               error "API_S3_KEY is required (the S3 key to api.zip from your API pipeline)."
             }
 
-            // --- PowerShell template (single-quoted so $ vars remain PowerShell) ---
+            // --- PowerShell template (triple-single quoted) ---
             def ps = '''$ErrorActionPreference = 'Stop'
-            Import-Module WebAdministration
-            aws --version | Out-Null
+              Import-Module WebAdministration
+              aws --version | Out-Null
 
-            # Inputs
-            $region    = '{{AWS_REGION}}'
-            $bucket    = '{{ARTIFACT_BUCKET}}'
-            $webKey    = '{{WEB_S3_KEY}}'
-            $apiKey    = '{{API_S3_KEY}}'
+              # Inputs
+              $region    = '{{AWS_REGION}}'
+              $bucket    = '{{ARTIFACT_BUCKET}}'
+              $webKey    = '{{WEB_S3_KEY}}'
+              $apiKey    = '{{API_S3_KEY}}'
 
-            $siteName  = '{{IIS_SITE_NAME}}'
-            $siteRoot  = '{{IIS_SITE_ROOT}}'
-            $apiRoot   = '{{IIS_API_ROOT}}'
-            $appPool   = '{{IIS_APP_POOL}}'
+              $siteName  = '{{IIS_SITE_NAME}}'
+              $siteRoot  = '{{IIS_SITE_ROOT}}'
+              $apiRoot   = '{{IIS_API_ROOT}}'
+              $appPool   = '{{IIS_APP_POOL}}'
 
-            $inbox     = 'C:\deploy\incoming'
-            $webZip    = Join-Path $inbox 'web.zip'
-            $apiZip    = Join-Path $inbox 'api.zip'
-            $webTmp    = Join-Path $inbox 'web_unzip'
-            $apiTmp    = Join-Path $inbox 'api_unzip'
+              $inbox     = 'C:\deploy\incoming'
+              $webZip    = Join-Path $inbox 'web.zip'
+              $apiZip    = Join-Path $inbox 'api.zip'
+              $webTmp    = Join-Path $inbox 'web_unzip'
+              $apiTmp    = Join-Path $inbox 'api_unzip'
 
-            # Ensure folders
-            New-Item -ItemType Directory -Force -Path $inbox    | Out-Null
-            New-Item -ItemType Directory -Force -Path $siteRoot | Out-Null
-            New-Item -ItemType Directory -Force -Path $apiRoot  | Out-Null
+              # Ensure folders
+              New-Item -ItemType Directory -Force -Path $inbox    | Out-Null
+              New-Item -ItemType Directory -Force -Path $siteRoot | Out-Null
+              New-Item -ItemType Directory -Force -Path $apiRoot  | Out-Null
 
-            # Fetch artifacts
-            if (Test-Path $webZip) { Remove-Item $webZip -Force }
-            if (Test-Path $apiZip) { Remove-Item $apiZip -Force }
-            aws s3 cp "s3://$bucket/$webKey" $webZip --region $region
-            aws s3 cp "s3://$bucket/$apiKey" $apiZip --region $region
+              # Fetch artifacts
+              if (Test-Path $webZip) { Remove-Item $webZip -Force }
+              if (Test-Path $apiZip) { Remove-Item $apiZip -Force }
+              aws s3 cp "s3://$bucket/$webKey" $webZip --region $region
+              aws s3 cp "s3://$bucket/$apiKey" $apiZip --region $region
 
-            # Unzip fresh
-            foreach ($p in @($webTmp,$apiTmp)) { if (Test-Path $p) { Remove-Item $p -Recurse -Force }; New-Item -ItemType Directory -Path $p | Out-Null }
-            Add-Type -AssemblyName System.IO.Compression.FileSystem
-            [System.IO.Compression.ZipFile]::ExtractToDirectory($webZip, $webTmp)
-            [System.IO.Compression.ZipFile]::ExtractToDirectory($apiZip, $apiTmp)
+              # Unzip fresh
+              foreach ($p in @($webTmp,$apiTmp)) { if (Test-Path $p) { Remove-Item $p -Recurse -Force }; New-Item -ItemType Directory -Path $p | Out-Null }
+              Add-Type -AssemblyName System.IO.Compression.FileSystem
+              [System.IO.Compression.ZipFile]::ExtractToDirectory($webZip, $webTmp)
+              [System.IO.Compression.ZipFile]::ExtractToDirectory($apiZip, $apiTmp)
 
-            # Stop site if exists
-            if (Get-Website -Name $siteName -ErrorAction SilentlyContinue) {
-              Stop-WebSite -Name $siteName -ErrorAction SilentlyContinue
-            }
+              # Stop site if exists
+              if (Get-Website -Name $siteName -ErrorAction SilentlyContinue) {
+                Stop-WebSite -Name $siteName -ErrorAction SilentlyContinue
+              }
 
-            # Deploy WEB (React)
-            if (Test-Path $siteRoot) { Get-ChildItem -Path $siteRoot -Force | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue }
-            Copy-Item "$webTmp\*" $siteRoot -Recurse -Force
+              # Deploy WEB (React)
+              if (Test-Path $siteRoot) { Get-ChildItem -Path $siteRoot -Force | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue }
+              Copy-Item "$webTmp\*" $siteRoot -Recurse -Force
 
-            # SPA web.config fallback if missing
-            $spaConfig = @"
-            <?xml version="1.0" encoding="utf-8"?>
-            <configuration>
-              <system.webServer>
-                <rewrite>
-                  <rules>
-                    <rule name="React SPA Fallback" stopProcessing="true">
-                      <match url=".*" />
-                      <conditions>
-                        <add input="{REQUEST_FILENAME}" matchType="IsFile" negate="true" />
-                        <add input="{REQUEST_FILENAME}" matchType="IsDirectory" negate="true" />
-                      </conditions>
-                      <action type="Rewrite" url="/index.html" />
-                    </rule>
-                  </rules>
-                </rewrite>
-                <staticContent>
-                  <mimeMap fileExtension=".json" mimeType="application/json" />
-                </staticContent>
-              </system.webServer>
-            </configuration>
-            "@
-            if (-not (Test-Path (Join-Path $siteRoot 'web.config'))) {
-              $spaConfig | Out-File -FilePath (Join-Path $siteRoot 'web.config') -Encoding UTF8 -Force
-            }
+              # SPA web.config fallback if missing
+              $spaConfig = @"
+              <?xml version="1.0" encoding="utf-8"?>
+              <configuration>
+                <system.webServer>
+                  <rewrite>
+                    <rules>
+                      <rule name="React SPA Fallback" stopProcessing="true">
+                        <match url=".*" />
+                        <conditions>
+                          <add input="{REQUEST_FILENAME}" matchType="IsFile" negate="true" />
+                          <add input="{REQUEST_FILENAME}" matchType="IsDirectory" negate="true" />
+                        </conditions>
+                        <action type="Rewrite" url="/index.html" />
+                      </rule>
+                    </rules>
+                  </rewrite>
+                  <staticContent>
+                    <mimeMap fileExtension=".json" mimeType="application/json" />
+                  </staticContent>
+                </system.webServer>
+              </configuration>
+              "@
+              if (-not (Test-Path (Join-Path $siteRoot 'web.config'))) {
+                $spaConfig | Out-File -FilePath (Join-Path $siteRoot 'web.config') -Encoding UTF8 -Force
+              }
 
-            # Deploy API (published output with ASP.NET Core web.config inside)
-            if (Test-Path $apiRoot) { Get-ChildItem -Path $apiRoot -Force | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue }
-            Copy-Item "$apiTmp\*" $apiRoot -Recurse -Force
+              # Deploy API (published output with ASP.NET Core web.config inside)
+              if (Test-Path $apiRoot) { Get-ChildItem -Path $apiRoot -Force | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue }
+              Copy-Item "$apiTmp\*" $apiRoot -Recurse -Force
 
-            # Ensure App Pool (No Managed Code)
-            if (-not (Test-Path IIS:\AppPools\$appPool)) {
-              New-Item IIS:\AppPools\$appPool | Out-Null
-              Set-ItemProperty IIS:\AppPools\$appPool -Name managedRuntimeVersion -Value ''
-              Set-ItemProperty IIS:\AppPools\$appPool -Name startMode -Value 'AlwaysRunning'
-            } else {
-              Set-ItemProperty IIS:\AppPools\$appPool -Name managedRuntimeVersion -Value ''
-            }
+              # Ensure App Pool (No Managed Code)
+              if (-not (Test-Path IIS:\AppPools\$appPool)) {
+                New-Item IIS:\AppPools\$appPool | Out-Null
+                Set-ItemProperty IIS:\AppPools\$appPool -Name managedRuntimeVersion -Value ''
+                Set-ItemProperty IIS:\AppPools\$appPool -Name startMode -Value 'AlwaysRunning'
+              } else {
+                Set-ItemProperty IIS:\AppPools\$appPool -Name managedRuntimeVersion -Value ''
+              }
 
-            # Ensure Site
-            if (-not (Get-Website -Name $siteName -ErrorAction SilentlyContinue)) {
-              New-Website -Name $siteName -PhysicalPath $siteRoot -Port 80 -Force | Out-Null
-            } else {
-              Set-ItemProperty IIS:\Sites\$siteName -Name physicalPath -Value $siteRoot
-            }
+              # Ensure Site
+              if (-not (Get-Website -Name $siteName -ErrorAction SilentlyContinue)) {
+                New-Website -Name $siteName -PhysicalPath $siteRoot -Port 80 -Force | Out-Null
+              } else {
+                Set-ItemProperty IIS:\Sites\$siteName -Name physicalPath -Value $siteRoot
+              }
 
-            # Ensure /api application under the site
-            $apiAppPath = "IIS:\Sites\$siteName\api"
-            if (-not (Test-Path $apiAppPath)) {
-              New-WebApplication -Site $siteName -Name 'api' -PhysicalPath $apiRoot -ApplicationPool $appPool | Out-Null
-            } else {
-              Set-ItemProperty $apiAppPath -Name physicalPath -Value $apiRoot
-              Set-ItemProperty $apiAppPath -Name applicationPool -Value $appPool
-            }
+              # Ensure /api application under the site
+              $apiAppPath = "IIS:\Sites\$siteName\api"
+              if (-not (Test-Path $apiAppPath)) {
+                New-WebApplication -Site $siteName -Name 'api' -PhysicalPath $apiRoot -ApplicationPool $appPool | Out-Null
+              } else {
+                Set-ItemProperty $apiAppPath -Name physicalPath -Value $apiRoot
+                Set-ItemProperty $apiAppPath -Name applicationPool -Value $appPool
+              }
 
-            # Permissions (read/execute for IIS_IUSRS)
-            & icacls $siteRoot /grant "IIS_IUSRS:(OI)(CI)RX" /T | Out-Null
-            & icacls $apiRoot  /grant "IIS_IUSRS:(OI)(CI)RX" /T | Out-Null
+              # Permissions (read/execute for IIS_IUSRS)
+              & icacls $siteRoot /grant "IIS_IUSRS:(OI)(CI)RX" /T | Out-Null
+              & icacls $apiRoot  /grant "IIS_IUSRS:(OI)(CI)RX" /T | Out-Null
 
-            # Start site
-            Start-WebSite -Name $siteName
+              # Start site
+              Start-WebSite -Name $siteName
 
-            Write-Host "✓ Deployed web to $siteRoot and API to $apiRoot under site '$siteName' (/api)."
-          '''
+              Write-Host "✓ Deployed web to $siteRoot and API to $apiRoot under site '$siteName' (/api)."
+            '''
 
             // Token substitution (escape backslashes for PS paths)
             ps = ps
@@ -251,13 +251,13 @@ pipeline {
               .replace('{{IIS_API_ROOT}}',  params.IIS_API_ROOT.replace('\\','\\\\'))
               .replace('{{IIS_APP_POOL}}',  params.IIS_APP_POOL)
 
-            // Build {"commands":[ "...", ... ]} for SSM
+            // Build {"commands":[ ... ]} for SSM
             def lines   = ps.split(/\r?\n/)
             def escaped = lines.collect { it.replace("\\", "\\\\").replace("\"", "\\\"") }
             def json    = '{"commands":["' + escaped.join('","') + '"]}'
             writeFile file: 'params_both.json', text: json
 
-            // Send command & capture clean CommandId
+            // Send & capture CommandId
             def cmdId = bat(
               returnStdout: true,
               script: """
@@ -291,7 +291,7 @@ pipeline {
               sleep time: 5, unit: 'SECONDS'
             }
 
-            // Fetch stdout/stderr
+            // Fetch output
             def ssmOut = bat(
               returnStdout: true,
               script: """
@@ -326,6 +326,7 @@ pipeline {
       }
     }
   }
+
 
   }
 
