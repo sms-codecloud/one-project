@@ -138,14 +138,67 @@ pipeline {
                 Write-Host "Deployed static site to \$siteRoot"
               """
 
-              bat """
+              bat '''
+                del /q params.json 2>nul
+
+                powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+                  "$ps = @'
+              $ErrorActionPreference = 'Stop'
+              aws --version | Out-Null
+
+              $bucket='${params.ARTIFACT_BUCKET}'
+              $key='${env.S3_KEY}'
+              $zip='C:\\deploy\\incoming\\web.zip'
+              $temp='C:\\deploy\\incoming\\web_unzip'
+              $siteRoot='C:\\deploy\\web'
+              $siteName='one-project'
+
+              New-Item -ItemType Directory -Force -Path (Split-Path $zip) | Out-Null
+              New-Item -ItemType Directory -Force -Path $siteRoot | Out-Null
+
+              if (Test-Path $zip) { Remove-Item $zip -Force }
+              aws s3 cp \\"s3://$bucket/$key\\" $zip --region ${params.AWS_REGION}
+
+              if (Test-Path $temp) { Remove-Item $temp -Recurse -Force }
+              New-Item -ItemType Directory -Force -Path $temp | Out-Null
+              Add-Type -AssemblyName System.IO.Compression.FileSystem
+              [System.IO.Compression.ZipFile]::ExtractToDirectory($zip, $temp)
+
+              Import-Module WebAdministration
+              if (Get-Website -Name $siteName -ErrorAction SilentlyContinue) {
+                Stop-WebSite -Name $siteName -ErrorAction SilentlyContinue
+              }
+
+              if (Test-Path $siteRoot) {
+                Get-ChildItem -Path $siteRoot -Force | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+              } else {
+                New-Item -ItemType Directory -Force -Path $siteRoot | Out-Null
+              }
+
+              Copy-Item \\"$temp\\*\\" $siteRoot -Recurse -Force
+
+              if (Get-Website -Name $siteName -ErrorAction SilentlyContinue) {
+                Start-WebSite -Name $siteName
+              } else {
+                New-Website -Name $siteName -PhysicalPath $siteRoot -Port 80 -Force
+              }
+
+              Write-Host \\"Deployed static site to $siteRoot\\"
+              '@; ^
+              $cmds = $ps -split '\\r?\\n'; ^
+              @{ commands = $cmds } | ConvertTo-Json -Depth 3 | Set-Content -Path params.json -Encoding ASCII"
+
                 aws ssm send-command ^
                   --instance-ids ${params.EC2_INSTANCE_ID} ^
-                  --document-name "AWS-RunPowerShellScript" ^
-                  --parameters commands="${ps.replace('"','\\"').replace("\n","`n")}" ^
+                  --document-name AWS-RunPowerShellScript ^
+                  --parameters file://params.json ^
                   --region ${params.AWS_REGION} ^
+                  --cli-binary-format raw-in-base64-out ^
                   --query "Command.CommandId" --output text > cmdid.txt
-              """
+
+                set /p CMDID=<cmdid.txt
+                echo SSM CommandId=%CMDID%
+            '''
               bat 'set /p CMDID=<cmdid.txt & echo SSM CommandId=%CMDID%'
             }
           }
