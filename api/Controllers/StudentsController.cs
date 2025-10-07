@@ -22,8 +22,7 @@ public class StudentsController : ControllerBase
     public async Task<ActionResult<Student>> GetOne(int id)
     {
         var s = await _db.Students.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id);
-        if (s is null) return NotFound();
-        return s;
+        return s is null ? NotFound() : Ok(s);
     }
 
     // POST: api/students
@@ -41,15 +40,7 @@ public class StudentsController : ControllerBase
     {
         if (id != s.Id) return BadRequest();
         _db.Entry(s).State = EntityState.Modified;
-        try
-        {
-            await _db.SaveChangesAsync();
-        }
-        catch (DbUpdateConcurrencyException)
-        {
-            if (!await _db.Students.AnyAsync(x => x.Id == id)) return NotFound();
-            throw;
-        }
+        await _db.SaveChangesAsync();
         return NoContent();
     }
 
