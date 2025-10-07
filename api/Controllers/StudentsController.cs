@@ -1,8 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using StudentApi.Data;
-using StudentEntity = StudentApi.Data.Student;
-using StudentDto     = StudentApi.Models.Student;
+using StudentApi.Models;
 
 namespace StudentApi.Controllers;
 
@@ -13,56 +12,54 @@ public class StudentsController : ControllerBase
     private readonly AppDbContext _db;
     public StudentsController(AppDbContext db) => _db = db;
 
+    // GET: api/students
     [HttpGet]
-    public async Task<ActionResult<IEnumerable<StudentDto>>> GetAll()
-    {
-        var entities = await _db.Students.AsNoTracking().ToListAsync();
-        var dtos = entities.Select(e => new StudentDto
-        {
-            Id = e.Id,
-            Name = e.Name,
-            Age = e.Age,
-            Email = e.Email
-        });
-        return Ok(dtos);
-    }
+    public async Task<ActionResult<IEnumerable<Student>>> GetAll() =>
+        await _db.Students.AsNoTracking().ToListAsync();
 
+    // GET: api/students/5
     [HttpGet("{id:int}")]
-    public async Task<ActionResult<StudentDto>> GetById(int id)
+    public async Task<ActionResult<Student>> GetOne(int id)
     {
-        var e = await _db.Students.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id);
-        if (e is null) return NotFound();
-        return new StudentDto { Id = e.Id, Name = e.Name, Age = e.Age, Email = e.Email };
+        var s = await _db.Students.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id);
+        if (s is null) return NotFound();
+        return s;
     }
 
+    // POST: api/students
     [HttpPost]
-    public async Task<ActionResult<StudentDto>> Create(StudentDto dto)
+    public async Task<ActionResult<Student>> Create(Student s)
     {
-        var e = new StudentEntity { Name = dto.Name, Age = dto.Age, Email = dto.Email };
-        _db.Students.Add(e);
+        _db.Students.Add(s);
         await _db.SaveChangesAsync();
-        dto.Id = e.Id;
-        return CreatedAtAction(nameof(GetById), new { id = e.Id }, dto);
+        return CreatedAtAction(nameof(GetOne), new { id = s.Id }, s);
     }
 
+    // PUT: api/students/5
     [HttpPut("{id:int}")]
-    public async Task<IActionResult> Update(int id, StudentDto dto)
+    public async Task<IActionResult> Update(int id, Student s)
     {
-        var e = await _db.Students.FirstOrDefaultAsync(x => x.Id == id);
-        if (e is null) return NotFound();
-        e.Name = dto.Name;
-        e.Age = dto.Age;
-        e.Email = dto.Email;
-        await _db.SaveChangesAsync();
+        if (id != s.Id) return BadRequest();
+        _db.Entry(s).State = EntityState.Modified;
+        try
+        {
+            await _db.SaveChangesAsync();
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            if (!await _db.Students.AnyAsync(x => x.Id == id)) return NotFound();
+            throw;
+        }
         return NoContent();
     }
 
+    // DELETE: api/students/5
     [HttpDelete("{id:int}")]
     public async Task<IActionResult> Delete(int id)
     {
-        var e = await _db.Students.FirstOrDefaultAsync(x => x.Id == id);
-        if (e is null) return NotFound();
-        _db.Students.Remove(e);
+        var s = await _db.Students.FindAsync(id);
+        if (s is null) return NotFound();
+        _db.Students.Remove(s);
         await _db.SaveChangesAsync();
         return NoContent();
     }
