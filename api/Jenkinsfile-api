@@ -8,36 +8,61 @@ pipeline {
   }
 
   parameters {
-    // --- Git source (we avoid `checkout scm` to keep WORKSPACE clean)
-    string(name: 'GIT_URL',  defaultValue: '',            description: 'Git repo URL (leave blank to auto-detect from job SCM)')
-    string(name: 'BRANCH',   defaultValue: 'shankar-infra',        description: 'Git branch to build')
+    // Build/settings
+    string(name: 'PROJECT_REL', defaultValue: 'one-project/api', description: 'Path to API project within repo')
+    choice(name: 'CONFIG', choices: ['Release','Debug'], description: 'Build configuration')
+    booleanParam(name: 'RUN_TESTS', defaultValue: true, description: 'Run tests')
 
-    // --- Build/settings
-    string(name: 'PROJECT_REL',  defaultValue: 'one-project/api', description: 'Path to API project within repo')
-    choice(name: 'CONFIG',       choices: ['Release','Debug'],     description: 'Build configuration')
-    booleanParam(name: 'RUN_TESTS', defaultValue: true,            description: 'Run tests')
+    // AWS / Deploy
+    string(name: 'AWS_REGION',   defaultValue: 'ap-south-1', description: 'AWS region')
+    string(name: 'AWS_CREDS_ID', defaultValue: 'aws_secrets_shankar', description: 'Jenkins AWS creds ID')
+    string(name: 'EC2_INSTANCE_ID', defaultValue: '', description: 'Target Windows EC2 instance id (SSM)')
 
-    // --- AWS / deploy
-    string(name: 'AWS_REGION',      defaultValue: 'ap-south-1',       description: 'AWS region')
-    string(name: 'AWS_CREDS_ID',    defaultValue: 'aws_secrets_shankar', description: 'Jenkins AWS creds ID')
-    string(name: 'EC2_INSTANCE_ID', defaultValue: '',                 description: 'Target Windows EC2 instance id (SSM)')
-    string(name: 'S3_BUCKET',       defaultValue: 'arj-bootcamp',     description: 'Artifact bucket')
-    string(name: 'S3_KEY',          defaultValue: 'api/student-api-11.zip', description: 'Artifact key (zip)')
-    password(name: 'MYSQL_APP_PASSWORD', defaultValue: '', description: 'MySQL password for student_user (use secret text in prod)')
+    // Secret text credential ID for MySQL app password (PROD)
+    // Keep this as a parameter so you can rotate/rename creds without code changes.
+    string(name: 'MYSQL_APP_PASSWORD_CRED_ID', defaultValue: 'mysql_app_password_prod', description: 'Secret Text credential ID for MySQL app password (prod)')
   }
 
   environment {
     DOTNET_CLI_TELEMETRY_OPTOUT       = '1'
     DOTNET_SKIP_FIRST_TIME_EXPERIENCE = '1'
     CLONE_ROOT  = 'D:\\jenkins-workspace\\workspace'
-    // Build folder = D:\jenkins-workspace\workspace\<JOB_NAME>\<BUILD_NUMBER>
     BUILD_DIR   = "${CLONE_ROOT}\\${JOB_NAME}\\${BUILD_NUMBER}"
-    SRC_DIR     = "${BUILD_DIR}\\${params.PROJECT_REL}"
     PUBLISH_DIR = 'publish'
     ARTIFACT_ZIP = 'student-api.zip'
+    // S3 key auto-derived from build number (always latest of this job run)
+    S3_KEY = "api/student-api-${BUILD_NUMBER}.zip"
   }
 
   stages {
+
+    stage('Resolve SCM (URL & Branch)') {
+      steps {
+        script {
+          // Derive Git URL from job SCM
+          def cfg = null
+          try { cfg = scm.getUserRemoteConfigs() } catch (ignored) {}
+          if (!cfg || cfg.isEmpty()) { error "Could not read userRemoteConfigs from job SCM. Configure SCM in the job." }
+          env._GIT_URL = cfg[0].getUrl()
+
+          // Derive branch
+          // Prefer BRANCH_NAME (multibranch), else read from SCM config, strip "*/"
+          def br = env.BRANCH_NAME ?: ''
+          if (!br?.trim()) {
+            try {
+              def branches = scm.getBranches()
+              if (branches && branches.size() > 0) {
+                br = branches[0].getName()
+              }
+            } catch (ignored) {}
+          }
+          if (!br?.trim()) { error "Could not determine branch from job SCM (BRANCH_NAME or scm.getBranches())." }
+          env._BRANCH = br.replaceFirst('^\\*/', '')
+          echo "SCM URL: ${env._GIT_URL}"
+          echo "SCM Branch: ${env._BRANCH}"
+        }
+      }
+    }
 
     stage('Prepare clean external build folder') {
       steps {
@@ -50,39 +75,13 @@ pipeline {
       }
     }
 
-    stage('Determine Git URL') {
-      steps {
-        script {
-          // Allow auto-detect from configured SCM (without checking out into WORKSPACE)
-          if (!params.GIT_URL?.trim()) {
-            try {
-              // Works if job has SCM configured; does NOT perform a checkout
-              def cfg = scm.getUserRemoteConfigs()
-              if (cfg && cfg.size() > 0) {
-                env._GIT_URL = cfg[0].getUrl()
-              }
-            } catch (ignored) {
-              // fall through
-            }
-          }
-          if (!env._GIT_URL) {
-            env._GIT_URL = params.GIT_URL?.trim()
-          }
-          if (!env._GIT_URL) {
-            error "GIT_URL not provided and could not auto-detect from job SCM."
-          }
-          echo "Using GIT_URL: ${env._GIT_URL}"
-        }
-      }
-    }
-
     stage('Clone into external directory') {
       steps {
         dir("${env.BUILD_DIR}") {
           bat """
             @echo on
             git --version
-            git clone --branch "%BRANCH%" --depth 1 "%_GIT_URL%" repo
+            git clone --branch "%_BRANCH%" --depth 1 "%_GIT_URL%" repo
           """
         }
       }
@@ -120,10 +119,7 @@ pipeline {
         }
       }
       post {
-        always {
-          // Collect any TRX/JUnit if produced (allow empty)
-          junit allowEmptyResults: true, testResults: '**/TestResults/*.xml'
-        }
+        always { junit allowEmptyResults: true, testResults: '**/TestResults/*.xml' }
       }
     }
 
@@ -157,7 +153,7 @@ pipeline {
               \$ErrorActionPreference = 'Stop'
               aws --version
               if (!(Test-Path '${env.ARTIFACT_ZIP}')) { throw 'Artifact zip missing.' }
-              aws s3 cp '${env.ARTIFACT_ZIP}' s3://${params.S3_BUCKET}/${params.S3_KEY} --region ${params.AWS_REGION} --only-show-errors
+              aws s3 cp '${env.ARTIFACT_ZIP}' s3://${env.S3_BUCKET ?? 'arj-bootcamp'}/${env.S3_KEY} --region ${params.AWS_REGION} --only-show-errors
             """
           }
         }
@@ -166,7 +162,10 @@ pipeline {
 
     stage('Deploy via SSM (script from repo)') {
       steps {
-        withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: params.AWS_CREDS_ID]]) {
+        withCredentials([
+          [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: params.AWS_CREDS_ID],
+          string(credentialsId: "${params.MYSQL_APP_PASSWORD_CRED_ID}", variable: 'MYSQL_APP_PASSWORD') // Secret Text (prod)
+        ]) {
           dir("${env.BUILD_DIR}\\repo\\${params.PROJECT_REL}") {
             powershell """
               \$ErrorActionPreference = 'Stop'
@@ -176,9 +175,9 @@ pipeline {
               powershell -ExecutionPolicy Bypass -File "\$script" `
                 -InstanceId "${params.EC2_INSTANCE_ID}" `
                 -Region     "${params.AWS_REGION}" `
-                -Bucket     "${params.S3_BUCKET}" `
-                -Key        "${params.S3_KEY}" `
-                -MySQLAppPassword "${params.MYSQL_APP_PASSWORD}"
+                -Bucket     "arj-bootcamp" `
+                -Key        "${env.S3_KEY}" `
+                -MySQLAppPassword "$env:MYSQL_APP_PASSWORD"
             """
           }
         }
@@ -187,8 +186,8 @@ pipeline {
 
     stage('Summary') {
       steps {
-        echo "Built & tested from external dir: ${env.BUILD_DIR}"
-        echo "Uploaded ${env.ARTIFACT_ZIP} to s3://${params.S3_BUCKET}/${params.S3_KEY} in ${params.AWS_REGION}"
+        echo "Built & tested from: ${env.BUILD_DIR}"
+        echo "Uploaded ${env.ARTIFACT_ZIP} to s3://arj-bootcamp/${env.S3_KEY} (${params.AWS_REGION})"
         echo "Deployed to EC2 (SSM): ${params.EC2_INSTANCE_ID}"
       }
     }
@@ -196,7 +195,6 @@ pipeline {
 
   post {
     always {
-      // Keep Jenkins WORKSPACE clean, and also remove the external clone/build dir for this build
       powershell '''
         $ErrorActionPreference = "SilentlyContinue"
         if (Test-Path "$env:BUILD_DIR") {
