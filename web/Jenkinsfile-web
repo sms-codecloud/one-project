@@ -3,24 +3,26 @@ pipeline {
   options { disableConcurrentBuilds(); timestamps() }
 
   parameters {
-    string(name: 'AWS_REGION',       defaultValue: 'ap-south-1', description: 'AWS region')
-    string(name: 'EC2_INSTANCE_ID',  defaultValue: '',           description: 'EC2 instance ID (from infra outputs)')
-    string(name: 'ARTIFACT_BUCKET',  defaultValue: 'arj-bootcamp', description: 'S3 bucket for deploy artifacts')
-    string(name: 'APP_REL_PATH',     defaultValue: 'web',        description: 'Relative path to React app folder')
-    string(name: 'APP_NAME',         defaultValue: 'student-web', description: 'Bundle name prefix')
-    choice(name: 'NODE_MODE',        choices: ['production','development'], description: 'NODE_ENV')
+    string( name: 'AWS_REGION',        defaultValue: 'ap-south-1',      description: 'AWS region')
+    string( name: 'EC2_INSTANCE_ID',   defaultValue: '',                description: 'Target Windows EC2 (from infra outputs)')
+    string( name: 'ARTIFACT_BUCKET',   defaultValue: 'arj-bootcamp',    description: 'S3 bucket for deploy artifacts')
+    string( name: 'APP_REL_PATH',      defaultValue: 'web',             description: 'Relative path to React app folder')
+    string( name: 'APP_NAME',          defaultValue: 'student-web',     description: 'Bundle name prefix')
+    choice( name: 'NODE_MODE',         choices: ['production','development'], description: 'NODE_ENV for runtime (build step forces dev for tooling)')
+    // Optional: wire your React app to the IIS-hosted .NET API
+    string( name: 'API_BASE_URL',      defaultValue: '',                description: 'Optional API base (e.g. http://localhost:5000 or https://site/api)')
+    string( name: 'IIS_SITE_NAME',     defaultValue: 'one-project',     description: 'IIS site name on EC2')
+    string( name: 'IIS_SITE_ROOT',     defaultValue: 'C:\\deploy\\web', description: 'IIS site physical path on EC2')
   }
 
   environment {
     NODE_ENV = "${params.NODE_MODE}"
-    // ✅ Use Groovy env var syntax, not PowerShell:
-    PATH = "C:\\Program Files\\nodejs;C:\\Program Files\\Amazon\\AWSCLIV2;${env.PATH}"
-    // Ensure this is always defined:
+    PATH     = "C:\\Program Files\\nodejs;C:\\Program Files\\Amazon\\AWSCLIV2;${env.PATH}"
     FORCED_WS = 'D:\\jenkins-workspace\\workspace'
   }
 
   stages {
-    stage('Prepare Workspace & Checkout') {
+    stage('Checkout (forced workspace)') {
       steps {
         ws("${env.FORCED_WS}") {
           deleteDir()
@@ -30,46 +32,47 @@ pipeline {
       }
     }
 
+    stage('Prepare env (optional API base)') {
+      when { expression { return params.API_BASE_URL?.trim() } }
+      steps {
+        ws("${env.FORCED_WS}") {
+          dir("${params.APP_REL_PATH}") {
+            // For Vite-style env vars; adjust if you use CRA or custom
+            writeFile file: '.env.production', text: "VITE_API_BASE_URL=${params.API_BASE_URL}\r\n"
+            echo "Wrote .env.production with VITE_API_BASE_URL=${params.API_BASE_URL}"
+          }
+        }
+      }
+    }
+
     stage('Install & Build (local)') {
       steps {
         ws("${env.FORCED_WS}") {
           dir("${params.APP_REL_PATH}") {
-            // Force devDeps install for the build (Vite lives in devDependencies)
-            withEnv(['NODE_ENV=development', 'NPM_CONFIG_PRODUCTION=false']) {
+            // Force devDeps present so vite/webpack/build tools exist
+            withEnv(['NODE_ENV=development','NPM_CONFIG_PRODUCTION=false']) {
               bat 'cmd /c node -v'
               bat 'cmd /c npm -v'
-
-              // Prefer ci if lockfile exists; ensure dev deps are included
               bat 'cmd /c if exist package-lock.json (npm ci --include=dev) else (npm install)'
-
-              // Run the package script (will find local vite now)
               bat 'cmd /c npm run build'
             }
 
-            // Detect output dir (vite=dist, CRA=build), then zip it
+            // Zip the build output (supports Vite=dist or CRA=build)
             bat '''
               if exist dist ( set "BUILD_DIR=dist" ) else ( set "BUILD_DIR=build" )
-              rem Trim any stray spaces and show the value clearly
               for /f "tokens=* delims= " %%A in ("%BUILD_DIR%") do set "BUILD_DIR=%%~A"
               echo BUILD_DIR=[%BUILD_DIR%]
-
-              if not exist "%BUILD_DIR%" (
-                echo ERROR: No dist/ or build/ output folder found.& exit /b 2
-              )
-
+              if not exist "%BUILD_DIR%" ( echo ERROR: No dist/ or build/ folder.& exit /b 2 )
               if exist web.zip del /q web.zip
-
               powershell -NoProfile -ExecutionPolicy Bypass -Command ^
                 "$bd = $env:BUILD_DIR.Trim(); Compress-Archive -Path (Join-Path $bd '*') -DestinationPath web.zip -Force"
-
               dir web.zip
             '''
             archiveArtifacts artifacts: 'web.zip', fingerprint: true
           }
         }
       }
-   }
-
+    }
 
     stage('Upload to S3') {
       steps {
@@ -80,7 +83,7 @@ pipeline {
                 def key = "web/${params.APP_NAME}-${env.BUILD_NUMBER}.zip"
                 bat "aws s3 cp web.zip s3://${params.ARTIFACT_BUCKET}/${key} --region ${params.AWS_REGION}"
                 env.S3_KEY = key
-                echo "Uploaded to s3://${params.ARTIFACT_BUCKET}/${key}"
+                echo "Uploaded: s3://${params.ARTIFACT_BUCKET}/${key}"
               }
             }
           }
@@ -94,111 +97,110 @@ pipeline {
         ws("${env.FORCED_WS}") {
           withCredentials([[$class:'AmazonWebServicesCredentialsBinding', credentialsId:'aws_secrets_shankar']]) {
             script {
-              // --- 1) PowerShell to run on the EC2 Windows host ---
-              // Use a GString so Jenkins interpolates your params/vars, but keep $ for PowerShell by escaping as \$
+              // --- PS script that runs on EC2 Windows host ---
               def ps = """
-              \$ErrorActionPreference = 'Stop'
-              aws --version | Out-Null
+\$ErrorActionPreference = 'Stop'
+aws --version | Out-Null
 
-              \$bucket='${params.ARTIFACT_BUCKET}'
-              \$key='${env.S3_KEY}'
-              \$zip='C:\\\\deploy\\\\incoming\\\\web.zip'
-              \$temp='C:\\\\deploy\\\\incoming\\\\web_unzip'
-              \$siteRoot='C:\\\\deploy\\\\web'
-              \$siteName='one-project'
+\$bucket='${params.ARTIFACT_BUCKET}'
+\$key='${env.S3_KEY}'
+\$zip='C:\\\\deploy\\\\incoming\\\\web.zip'
+\$temp='C:\\\\deploy\\\\incoming\\\\web_unzip'
+\$siteRoot='${params.IIS_SITE_ROOT.replace('\\','\\\\')}'
+\$siteName='${params.IIS_SITE_NAME}'
 
-              # Ensure folders
-              New-Item -ItemType Directory -Force -Path (Split-Path \$zip) | Out-Null
-              New-Item -ItemType Directory -Force -Path \$siteRoot | Out-Null
+New-Item -ItemType Directory -Force -Path (Split-Path \$zip) | Out-Null
+New-Item -ItemType Directory -Force -Path \$siteRoot | Out-Null
 
-              # Fetch artifact
-              if (Test-Path \$zip) { Remove-Item \$zip -Force }
-              aws s3 cp "s3://\$bucket/\$key" \$zip --region ${params.AWS_REGION}
+if (Test-Path \$zip) { Remove-Item \$zip -Force }
+aws s3 cp "s3://\$bucket/\$key" \$zip --region ${params.AWS_REGION}
 
-              # Unzip fresh
-              if (Test-Path \$temp) { Remove-Item \$temp -Recurse -Force }
-              New-Item -ItemType Directory -Force -Path \$temp | Out-Null
-              Add-Type -AssemblyName System.IO.Compression.FileSystem
-              [System.IO.Compression.ZipFile]::ExtractToDirectory(\$zip, \$temp)
+if (Test-Path \$temp) { Remove-Item \$temp -Recurse -Force }
+New-Item -ItemType Directory -Force -Path \$temp | Out-Null
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+[System.IO.Compression.ZipFile]::ExtractToDirectory(\$zip, \$temp)
 
-              # IIS swap
-              Import-Module WebAdministration
-              if (Get-Website -Name \$siteName -ErrorAction SilentlyContinue) {
-                Stop-WebSite -Name \$siteName -ErrorAction SilentlyContinue
-              }
+Import-Module WebAdministration
+if (Get-Website -Name \$siteName -ErrorAction SilentlyContinue) {
+  Stop-WebSite -Name \$siteName -ErrorAction SilentlyContinue
+}
 
-              if (Test-Path \$siteRoot) {
-                Get-ChildItem -Path \$siteRoot -Force | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-              } else {
-                New-Item -ItemType Directory -Force -Path \$siteRoot | Out-Null
-              }
+if (Test-Path \$siteRoot) {
+  Get-ChildItem -Path \$siteRoot -Force | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+} else {
+  New-Item -ItemType Directory -Force -Path \$siteRoot | Out-Null
+}
 
-              Copy-Item "\$temp\\*" \$siteRoot -Recurse -Force
+Copy-Item "\$temp\\*" \$siteRoot -Recurse -Force
 
-              if (Get-Website -Name \$siteName -ErrorAction SilentlyContinue) {
-                Start-WebSite -Name \$siteName
-              } else {
-                New-Website -Name \$siteName -PhysicalPath \$siteRoot -Port 80 -Force
-              }
+if (Get-Website -Name \$siteName -ErrorAction SilentlyContinue) {
+  Start-WebSite -Name \$siteName
+} else {
+  New-Website -Name \$siteName -PhysicalPath \$siteRoot -Port 80 -Force
+}
 
-              Write-Host "Deployed static site to \$siteRoot"
-              """.trim()
+Write-Host "Deployed static site to \$siteRoot"
+""".trim()
 
-              // --- 2) Convert script to JSON for SSM {"commands":[...]} ---
+              // Build {"commands":[...]} JSON for SSM cleanly
               def lines   = ps.split(/\r?\n/)
               def escaped = lines.collect { it.replace("\\", "\\\\").replace("\"", "\\\"") }
               def json    = '{"commands":["' + escaped.join('","') + '"]}'
               writeFile file: 'params.json', text: json
 
-              // --- 3) Send command ---
-              bat """
-                aws ssm send-command ^
-                  --instance-ids ${params.EC2_INSTANCE_ID} ^
-                  --document-name AWS-RunPowerShellScript ^
-                  --parameters file://params.json ^
-                  --region ${params.AWS_REGION} ^
-                  --cli-binary-format raw-in-base64-out ^
-                  --query "Command.CommandId" --output text > cmdid.txt
-              """
-              def cmdId = bat(returnStdout: true, script: 'set /p X=<cmdid.txt & echo %X%').trim()
+              // Send & capture CommandId cleanly
+              def cmdId = bat(
+                returnStdout: true,
+                script: """
+                  aws ssm send-command ^
+                    --instance-ids ${params.EC2_INSTANCE_ID} ^
+                    --document-name AWS-RunPowerShellScript ^
+                    --parameters file://params.json ^
+                    --region ${params.AWS_REGION} ^
+                    --cli-binary-format raw-in-base64-out ^
+                    --query "Command.CommandId" --output text
+                """
+              ).trim()
               echo "SSM CommandId=${cmdId}"
 
-              // --- 4) Poll status until terminal state ---
+              // Poll status
               String status = ''
-              int maxLoops = 60   // ~5 minutes
+              int maxLoops = 60
               for (int i = 0; i < maxLoops; i++) {
-                status = bat(returnStdout: true, script:
-                  "aws ssm list-commands --command-id ${cmdId} --region ${params.AWS_REGION} --query \"Commands[0].Status\" --output text").trim()
+                status = bat(
+                  returnStdout: true,
+                  script: "aws ssm list-commands --command-id ${cmdId} --region ${params.AWS_REGION} --query \"Commands[0].Status\" --output text"
+                ).trim()
                 echo "SSM status: ${status}"
                 if (['Success','Failed','TimedOut','Cancelled'].contains(status)) break
                 sleep time: 5, unit: 'SECONDS'
               }
 
-              // --- 5) Fetch stdout/stderr from the invocation ---
-              bat """
-                aws ssm get-command-invocation ^
-                  --command-id ${cmdId} ^
-                  --instance-id ${params.EC2_INSTANCE_ID} ^
-                  --region ${params.AWS_REGION} ^
-                  --query "StandardOutputContent" --output text > ssm_out.txt
-              """
-              bat """
-                aws ssm get-command-invocation ^
-                  --command-id ${cmdId} ^
-                  --instance-id ${params.EC2_INSTANCE_ID} ^
-                  --region ${params.AWS_REGION} ^
-                  --query "StandardErrorContent" --output text > ssm_err.txt
-              """
+              // Fetch output
+              def ssmOut = bat(
+                returnStdout: true,
+                script: """
+                  aws ssm get-command-invocation ^
+                    --command-id ${cmdId} ^
+                    --instance-id ${params.EC2_INSTANCE_ID} ^
+                    --region ${params.AWS_REGION} ^
+                    --query "StandardOutputContent" --output text
+                """
+              )
+              def ssmErr = bat(
+                returnStdout: true,
+                script: """
+                  aws ssm get-command-invocation ^
+                    --command-id ${cmdId} ^
+                    --instance-id ${params.EC2_INSTANCE_ID} ^
+                    --region ${params.AWS_REGION} ^
+                    --query "StandardErrorContent" --output text
+                """
+              )
 
-              def ssmOut = readFile('ssm_out.txt')
-              def ssmErr = readFile('ssm_err.txt')
+              echo "----- SSM STDOUT -----\n${ssmOut}"
+              if (ssmErr?.trim()) echo "----- SSM STDERR -----\n${ssmErr}"
 
-              echo "----- SSM STDOUT -----\\n${ssmOut}"
-              if (ssmErr?.trim()) {
-                echo "----- SSM STDERR -----\\n${ssmErr}"
-              }
-
-              // --- 6) Fail build if not Success ---
               if (status != 'Success') {
                 error "SSM command ${cmdId} completed with status=${status}"
               }
@@ -210,8 +212,7 @@ pipeline {
   }
 
   post {
-    always {
-      echo "Done. Workspace used: ${env.FORCED_WS}"
-    }
+    success { echo "Web deployed to IIS on Windows EC2 (t2.micro) via SSM." }
+    always  { echo "Done. Workspace used: ${env.FORCED_WS}" }
   }
 }
