@@ -1,7 +1,8 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using StudentApi.Data;
-using StudentApi.Models;
+using StudentEntity = StudentApi.Data.Student;
+using StudentDto     = StudentApi.Models.Student;
 
 namespace StudentApi.Controllers;
 
@@ -13,30 +14,45 @@ public class StudentsController : ControllerBase
     public StudentsController(AppDbContext db) => _db = db;
 
     [HttpGet]
-    public async Task<ActionResult<IEnumerable<Student>>> Get()
-        => await _db.Students.AsNoTracking().ToListAsync();
+    public async Task<ActionResult<IEnumerable<StudentDto>>> GetAll()
+    {
+        var entities = await _db.Students.AsNoTracking().ToListAsync();
+        var dtos = entities.Select(e => new StudentDto
+        {
+            Id = e.Id,
+            Name = e.Name,
+            Age = e.Age,
+            Email = e.Email
+        });
+        return Ok(dtos);
+    }
 
     [HttpGet("{id:int}")]
-    public async Task<ActionResult<Student>> GetOne(int id)
+    public async Task<ActionResult<StudentDto>> GetById(int id)
     {
-        var s = await _db.Students.FindAsync(id);
-        return s is null ? NotFound() : Ok(s);
+        var e = await _db.Students.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id);
+        if (e is null) return NotFound();
+        return new StudentDto { Id = e.Id, Name = e.Name, Age = e.Age, Email = e.Email };
     }
 
     [HttpPost]
-    public async Task<ActionResult<Student>> Create(Student s)
+    public async Task<ActionResult<StudentDto>> Create(StudentDto dto)
     {
-        _db.Students.Add(s);
+        var e = new StudentEntity { Name = dto.Name, Age = dto.Age, Email = dto.Email };
+        _db.Students.Add(e);
         await _db.SaveChangesAsync();
-        return CreatedAtAction(nameof(GetOne), new { id = s.Id }, s);
+        dto.Id = e.Id;
+        return CreatedAtAction(nameof(GetById), new { id = e.Id }, dto);
     }
 
     [HttpPut("{id:int}")]
-    public async Task<IActionResult> Update(int id, Student s)
+    public async Task<IActionResult> Update(int id, StudentDto dto)
     {
-        if (id != s.Id) return BadRequest();
-        if (!await _db.Students.AnyAsync(x => x.Id == id)) return NotFound();
-        _db.Entry(s).State = EntityState.Modified;
+        var e = await _db.Students.FirstOrDefaultAsync(x => x.Id == id);
+        if (e is null) return NotFound();
+        e.Name = dto.Name;
+        e.Age = dto.Age;
+        e.Email = dto.Email;
         await _db.SaveChangesAsync();
         return NoContent();
     }
@@ -44,9 +60,9 @@ public class StudentsController : ControllerBase
     [HttpDelete("{id:int}")]
     public async Task<IActionResult> Delete(int id)
     {
-        var s = await _db.Students.FindAsync(id);
-        if (s is null) return NotFound();
-        _db.Students.Remove(s);
+        var e = await _db.Students.FirstOrDefaultAsync(x => x.Id == id);
+        if (e is null) return NotFound();
+        _db.Students.Remove(e);
         await _db.SaveChangesAsync();
         return NoContent();
     }

@@ -1,5 +1,5 @@
 using Microsoft.EntityFrameworkCore;
-
+using StudentEntity = StudentApi.Data.Student;
 namespace StudentApi.Data
 {
     public class StudentDbContext : DbContext
