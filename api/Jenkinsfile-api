@@ -1,59 +1,43 @@
 pipeline {
   agent { label 'win-dev' }
 
-  options {
-    timestamps()
-    ansiColor('xterm')
-    disableConcurrentBuilds()
-  }
+  options { timestamps(); ansiColor('xterm'); disableConcurrentBuilds() }
 
   parameters {
-    // Build/settings
     string(name: 'PROJECT_REL', defaultValue: 'one-project/api', description: 'Path to API project within repo')
     choice(name: 'CONFIG', choices: ['Release','Debug'], description: 'Build configuration')
     booleanParam(name: 'RUN_TESTS', defaultValue: true, description: 'Run tests')
-
-    // AWS / Deploy
-    string(name: 'AWS_REGION',   defaultValue: 'ap-south-1', description: 'AWS region')
+    string(name: 'AWS_REGION', defaultValue: 'ap-south-1', description: 'AWS region')
     string(name: 'AWS_CREDS_ID', defaultValue: 'aws_secrets_shankar', description: 'Jenkins AWS creds ID')
     string(name: 'EC2_INSTANCE_ID', defaultValue: '', description: 'Target Windows EC2 instance id (SSM)')
-
-    // Secret text credential ID for MySQL app password (PROD)
-    // Keep this as a parameter so you can rotate/rename creds without code changes.
     string(name: 'MYSQL_APP_PASSWORD_CRED_ID', defaultValue: 'mysql_app_password_prod', description: 'Secret Text credential ID for MySQL app password (prod)')
   }
 
   environment {
     DOTNET_CLI_TELEMETRY_OPTOUT       = '1'
     DOTNET_SKIP_FIRST_TIME_EXPERIENCE = '1'
-    CLONE_ROOT  = 'D:\\jenkins-workspace\\workspace'
-    BUILD_DIR   = "${CLONE_ROOT}\\${JOB_NAME}\\${BUILD_NUMBER}"
-    PUBLISH_DIR = 'publish'
+    CLONE_ROOT   = 'D:\\jenkins-workspace\\workspace'
+    BUILD_DIR    = "${CLONE_ROOT}\\${JOB_NAME}\\${BUILD_NUMBER}"
+    PUBLISH_DIR  = 'publish'
     ARTIFACT_ZIP = 'student-api.zip'
-    // S3 key auto-derived from build number (always latest of this job run)
-    S3_KEY = "api/student-api-${BUILD_NUMBER}.zip"
+    S3_BUCKET    = 'arj-bootcamp'                   // set once here
+    S3_KEY       = "api/student-api-${BUILD_NUMBER}.zip" // latest build-numbered key
   }
 
   stages {
-
     stage('Resolve SCM (URL & Branch)') {
       steps {
         script {
-          // Derive Git URL from job SCM
           def cfg = null
           try { cfg = scm.getUserRemoteConfigs() } catch (ignored) {}
           if (!cfg || cfg.isEmpty()) { error "Could not read userRemoteConfigs from job SCM. Configure SCM in the job." }
           env._GIT_URL = cfg[0].getUrl()
 
-          // Derive branch
-          // Prefer BRANCH_NAME (multibranch), else read from SCM config, strip "*/"
           def br = env.BRANCH_NAME ?: ''
           if (!br?.trim()) {
             try {
               def branches = scm.getBranches()
-              if (branches && branches.size() > 0) {
-                br = branches[0].getName()
-              }
+              if (branches && branches.size() > 0) { br = branches[0].getName() }
             } catch (ignored) {}
           }
           if (!br?.trim()) { error "Could not determine branch from job SCM (BRANCH_NAME or scm.getBranches())." }
@@ -68,7 +52,6 @@ pipeline {
       steps {
         powershell '''
           $ErrorActionPreference = "Stop"
-          Write-Host "BUILD_DIR: $env:BUILD_DIR"
           if (Test-Path $env:BUILD_DIR) { Remove-Item -Recurse -Force $env:BUILD_DIR }
           New-Item -ItemType Directory -Force -Path $env:BUILD_DIR | Out-Null
         '''
@@ -109,18 +92,13 @@ pipeline {
             $tests = Get-ChildItem -Recurse -Filter *.csproj | Where-Object { $_.FullName -match '(?i)test|tests' }
             if ($tests) {
               foreach ($t in $tests) {
-                Write-Host "Running tests in $($t.FullName)"
                 dotnet test $t.FullName -c $env:CONFIG --no-build --logger "trx;LogFileName=TestResults.trx"
               }
-            } else {
-              Write-Host "No tests found."
-            }
+            } else { Write-Host "No tests found." }
           '''
         }
       }
-      post {
-        always { junit allowEmptyResults: true, testResults: '**/TestResults/*.xml' }
-      }
+      post { always { junit allowEmptyResults: true, testResults: '**/TestResults/*.xml' } }
     }
 
     stage('Publish & Package') {
@@ -139,7 +117,6 @@ pipeline {
             $zip = Join-Path '${env.BUILD_DIR}' '${env.ARTIFACT_ZIP}'
             if (Test-Path $zip) { Remove-Item -Force $zip }
             Compress-Archive -Path * -DestinationPath $zip
-            Write-Host "Packaged: $zip"
           """
         }
       }
@@ -153,7 +130,7 @@ pipeline {
               \$ErrorActionPreference = 'Stop'
               aws --version
               if (!(Test-Path '${env.ARTIFACT_ZIP}')) { throw 'Artifact zip missing.' }
-              aws s3 cp '${env.ARTIFACT_ZIP}' s3://${env.S3_BUCKET ?? 'arj-bootcamp'}/${env.S3_KEY} --region ${params.AWS_REGION} --only-show-errors
+              aws s3 cp '${env.ARTIFACT_ZIP}' s3://${env.S3_BUCKET}/${env.S3_KEY} --region ${params.AWS_REGION} --only-show-errors
             """
           }
         }
@@ -164,7 +141,7 @@ pipeline {
       steps {
         withCredentials([
           [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: params.AWS_CREDS_ID],
-          string(credentialsId: "${params.MYSQL_APP_PASSWORD_CRED_ID}", variable: 'MYSQL_APP_PASSWORD') // Secret Text (prod)
+          string(credentialsId: "${params.MYSQL_APP_PASSWORD_CRED_ID}", variable: 'MYSQL_APP_PASSWORD')
         ]) {
           dir("${env.BUILD_DIR}\\repo\\${params.PROJECT_REL}") {
             powershell """
@@ -175,7 +152,7 @@ pipeline {
               powershell -ExecutionPolicy Bypass -File "\$script" `
                 -InstanceId "${params.EC2_INSTANCE_ID}" `
                 -Region     "${params.AWS_REGION}" `
-                -Bucket     "arj-bootcamp" `
+                -Bucket     "${env.S3_BUCKET}" `
                 -Key        "${env.S3_KEY}" `
                 -MySQLAppPassword "$env:MYSQL_APP_PASSWORD"
             """
@@ -187,7 +164,7 @@ pipeline {
     stage('Summary') {
       steps {
         echo "Built & tested from: ${env.BUILD_DIR}"
-        echo "Uploaded ${env.ARTIFACT_ZIP} to s3://arj-bootcamp/${env.S3_KEY} (${params.AWS_REGION})"
+        echo "Uploaded ${env.ARTIFACT_ZIP} to s3://${env.S3_BUCKET}/${env.S3_KEY} (${params.AWS_REGION})"
         echo "Deployed to EC2 (SSM): ${params.EC2_INSTANCE_ID}"
       }
     }
@@ -197,14 +174,9 @@ pipeline {
     always {
       powershell '''
         $ErrorActionPreference = "SilentlyContinue"
-        if (Test-Path "$env:BUILD_DIR") {
-          Write-Host "Cleaning external build dir: $env:BUILD_DIR"
-          Remove-Item -Recurse -Force "$env:BUILD_DIR"
-        }
+        if (Test-Path "$env:BUILD_DIR") { Remove-Item -Recurse -Force "$env:BUILD_DIR" }
       '''
     }
-    failure {
-      echo "Build failed. Check console logs."
-    }
+    failure { echo "Build failed. Check console logs." }
   }
 }
