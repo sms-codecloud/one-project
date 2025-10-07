@@ -1,18 +1,21 @@
-# Latest Ubuntu 22.04 LTS
-data "aws_ami" "ubuntu" {
+# --- Always get the most recent Windows Server 2022 English Full Base AMI ---
+# Uses official Amazon-owned images.
+data "aws_ami" "windows_2022" {
   most_recent = true
-  owners      = ["099720109477"]
+  owners      = ["amazon"]
+
   filter {
     name   = "name"
-    values = ["ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"]
+    values = ["Windows_Server-2022-English-Full-Base-*"]
   }
-}
 
-data "aws_vpc" "default" { default = true }
-
-data "aws_subnets" "default" {
   filter {
-    name   = "vpc-id"
-    values = [data.aws_vpc.default.id]
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
+
+  filter {
+    name   = "root-device-type"
+    values = ["ebs"]
   }
 }

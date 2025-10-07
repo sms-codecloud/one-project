@@ -1,8 +1,10 @@
+# --- Security Group: open HTTP to world, RDP is configurable (default: open) ---
 resource "aws_security_group" "app" {
-  name        = "single-ec2-nginx-mysql"
-  description = "Allow SSH and HTTP"
-  vpc_id      = data.aws_vpc.default.id
+  name        = "${var.project}-sg"
+  description = "Allow HTTP and (optionally) RDP"
+  vpc_id      = var.vpc_id
 
+  # HTTP for site
   ingress {
     description = "HTTP"
     from_port   = 80
@@ -11,12 +13,16 @@ resource "aws_security_group" "app" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  ingress {
-    description = "SSH"
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = var.allowed_ssh_cidrs
+  # RDP for admin (narrow this if possible)
+  dynamic "ingress" {
+    for_each = var.rdp_cidrs
+    content {
+      description = "RDP"
+      from_port   = 3389
+      to_port     = 3389
+      protocol    = "tcp"
+      cidr_blocks = [ingress.value]
+    }
   }
 
   egress {
@@ -26,18 +32,36 @@ resource "aws_security_group" "app" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  tags = { Name = "one-project-ec2" }
+  tags = merge(var.common_tags, {
+    Name = "${var.project}-sg"
+  })
 }
 
+# --- Windows EC2 instance (pulls latest AMI from the data source above) ---
 resource "aws_instance" "app" {
-  ami                         = "ami-0e6329e222e662a52"
+  ami                         = data.aws_ami.windows_2022.id
   instance_type               = var.instance_type
-  key_name                    = var.key_name
+  subnet_id                   = var.subnet_id
   vpc_security_group_ids      = [aws_security_group.app.id]
-  subnet_id                   = element(data.aws_subnets.default.ids, 0)
-  associate_public_ip_address = true   # <- important
-  user_data = templatefile("${path.module}/data/user_data.sh", {
-    MYSQL_DB = var.mysql_db, MYSQL_USER = var.mysql_user, MYSQL_APP_PASSWORD = var.mysql_app_password
+  key_name                    = var.key_name
+  associate_public_ip_address = true
+  iam_instance_profile        = var.iam_instance_profile # optional
+
+  # Use your Windows PowerShell user_data
+  user_data = templatefile("${path.module}/data/user_data_windows.ps1", {
+    MYSQL_ROOT_PASSWORD = var.mysql_root_password
+    MYSQL_APP_PASSWORD  = var.mysql_app_password
   })
-  tags = { Name = "one-project-ec2" }
+
+  # Re-run user_data if its content changes
+  user_data_replace_on_change = true
+
+  metadata_options {
+    http_tokens = "required" # IMDSv2
+  }
+
+  tags = merge(var.common_tags, {
+    Name = "${var.project}-ec2"
+    OS   = "Windows-Server-2022"
+  })
 }

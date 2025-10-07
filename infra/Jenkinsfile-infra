@@ -1,99 +1,106 @@
 pipeline {
-  agent { label 'win-dev' }
+  agent { label 'win-dev' } // your Windows 11 Jenkins agent label
   options { disableConcurrentBuilds(); timestamps() }
 
   parameters {
     choice(name: 'TF_ACTION', choices: ['APPLY','DESTROY'], description: 'Terraform action')
-    string(name: 'CIDR_CRED_IDS', defaultValue: 'shankar_ip_cidr', description: 'Comma-separated Secret Text credential IDs; each contains a CIDR like 1.2.3.4/32')
-    string(name: 'MYSQL_APP_PASSWORD_ID', defaultValue: 'mysql_app_password', description: 'Secret Text credential ID for MySQL app password')
+    choice(name: 'INSTANCE_TYPE', choices: ['t3.micro','t2.micro','t3.small'], description: 'EC2 size (t3.micro is cheapest; t3.small is NOT free-tier)')
+    string(name: 'HTTP_CIDR',   defaultValue: '0.0.0.0/0', description: 'CIDR allowed to HTTP 80')
+    string(name: 'RDP_CIDR',    defaultValue: '0.0.0.0/0', description: 'CIDR allowed to RDP 3389')
+    string(name: 'KEY_NAME',    defaultValue: 'win-one-project-key-pair', description: 'EC2 key pair name (optional if only using SSM)')
+    string(name: 'AWS_REGION',  defaultValue: 'ap-south-1', description: 'AWS region')
   }
 
   environment {
     TF_IN_AUTOMATION = 'true'
     TF_DIR = 'infra'
-    PATH   = "C:\\binaries\\terraform;${env.PATH}"
   }
 
   stages {
-    stage('Checkout') { steps { checkout scm } }
-
-    stage('Bind Secrets → JSON') {
+    stage('Checkout') {
       steps {
-        script {
-          // Parse CIDR secret IDs
-          def raw = params.CIDR_CRED_IDS.tokenize(',')
-          def ids = []; for (r in raw) { def t=r.trim(); if (t) ids<<t }
-          if (ids.isEmpty()) error 'No CIDR credential IDs provided.'
+        deleteDir()
+        checkout scm
+        bat 'dir'
+      }
+    }
 
-          // Build the bindings list
-          def bindings = []
-          for (int i=0; i<ids.size(); i++) {
-            bindings << [$class:'StringBinding', credentialsId: ids[i], variable: "CIDR_${i}"]
-          }
-          // Add MySQL secret (parameterized)
-          def mysqlCredId = (params.MYSQL_APP_PASSWORD_ID ?: '').trim()
-          if (!mysqlCredId) { error 'MYSQL_APP_PASSWORD_ID parameter is empty.' }
-          bindings << [$class:'StringBinding', credentialsId: mysqlCredId, variable:'MYSQL_APP_PASSWORD']
-
-          // Try binding; if the ID is wrong/missing Jenkins will throw here
-          withCredentials(bindings) {
-            // Build JSON array of CIDRs
-            def cidrJson = powershell(returnStdout: true, script: '''
-              $ErrorActionPreference = "Stop"
-              $cidrs=@(); $i=0
-              while ($true) {
-                $name="CIDR_$i"; $val=[Environment]::GetEnvironmentVariable($name)
-                if ([string]::IsNullOrWhiteSpace($val)) { break }
-                $val=$val.Trim()
-                if (-not ($val -match "^\\d{1,3}(\\.\\d{1,3}){3}/(?:3[0-2]|[12]?\\d)$")) {
-                  throw ("Invalid CIDR in {0}: {1} (expected 203.0.113.10/32)" -f $name,$val)
-                }
-                $cidrs+=$val; $i++
-              }
-              if ($cidrs.Count -eq 0) { throw "No CIDRs found" }
-              ($cidrs | ConvertTo-Json -Compress)
-            ''').trim()
-
-            env.ALLOWED_CIDRS_JSON         = cidrJson
-            env.TF_VAR_mysql_app_password  = env.MYSQL_APP_PASSWORD
-
-            echo "Prepared ${ids.size()} SSH CIDR(s)."
+    stage('Terraform Init') {
+      steps {
+        withCredentials([[$class:'AmazonWebServicesCredentialsBinding', credentialsId:'aws_secrets_shankar']]) {
+          dir('infra') {
+            withEnv([
+              'PATH+TERRAFORM=C:\\binaries\\terraform',
+              'PATH+AWS=C:\\Program Files\\Amazon\\AWSCLIV2'
+            ]) {
+              bat 'terraform -version'
+              bat 'terraform init -reconfigure -input=false -no-color'
+            }
           }
         }
       }
     }
 
-    stage('Terraform Init & Run') {
+    stage('Terraform Plan') {
       steps {
         withCredentials([[$class:'AmazonWebServicesCredentialsBinding', credentialsId:'aws_secrets_shankar']]) {
-          dir("${env.WORKSPACE}\\${env.TF_DIR}") {
-            powershell '''
-              $ErrorActionPreference="Stop"
-              if (-not $env:ALLOWED_CIDRS_JSON) { throw "ALLOWED_CIDRS_JSON not set" }
-              $json = $env:ALLOWED_CIDRS_JSON.Trim()
-              if ($json -notmatch '^[\\[]') { $json = '["' + $json.Trim('"') + '"]' }
-              $content = '{ "allowed_ssh_cidrs": ' + $json + ' }'
-              $enc = New-Object System.Text.UTF8Encoding($false)
-              [System.IO.File]::WriteAllText("cidrs.auto.tfvars.json", $content, $enc)
-              Write-Host "cidrs.auto.tfvars.json: $content"
-            '''
-            powershell '''
-              $ErrorActionPreference="Stop"
-              $action = ($env:TF_ACTION | ForEach-Object { $_.Trim().ToUpperInvariant() })
-              if (Test-Path tfplan) { Remove-Item -Force tfplan }
+          dir('infra') {
+            withEnv([
+              'PATH+TERRAFORM=C:\\binaries\\terraform',
+              'PATH+AWS=C:\\Program Files\\Amazon\\AWSCLIV2'
+            ]) {
+              bat """
+                terraform plan ^
+                  -var="region=%AWS_REGION%" ^
+                  -var="instance_type=%INSTANCE_TYPE%" ^
+                  -var="key_name=%KEY_NAME%" ^
+                  -var="http_cidr=%HTTP_CIDR%" ^
+                  -var="rdp_cidr=%RDP_CIDR%" ^
+                  -out=plan.tfplan -no-color -input=false
+              """
+              // print a human-readable plan as well
+              bat 'terraform show -no-color plan.tfplan'
+            }
+          }
+        }
+      }
+    }
 
-              terraform init -reconfigure -upgrade -no-color -input=false
+    stage('Terraform Apply / Destroy') {
+      when { anyOf { expression { params.TF_ACTION == 'APPLY' }; expression { params.TF_ACTION == 'DESTROY' } } }
+      steps {
+        withCredentials([[$class:'AmazonWebServicesCredentialsBinding', credentialsId:'aws_secrets_shankar']]) {
+          dir('infra') {
+            withEnv([
+              'PATH+TERRAFORM=C:\\binaries\\terraform',
+              'PATH+AWS=C:\\Program Files\\Amazon\\AWSCLIV2'
+            ]) {
+              script {
+                if (params.TF_ACTION == 'APPLY') {
+                  bat 'terraform apply -auto-approve plan.tfplan -no-color'
+                } else {
+                  bat """
+                    terraform destroy ^
+                      -var="region=%AWS_REGION%" ^
+                      -var="instance_type=%INSTANCE_TYPE%" ^
+                      -var="key_name=%KEY_NAME%" ^
+                      -var="http_cidr=%HTTP_CIDR%" ^
+                      -var="rdp_cidr=%RDP_CIDR%" ^
+                      -auto-approve -no-color -input=false
+                  """
+                }
+              }
+            }
+          }
+        }
+      }
+    }
 
-              if ($action -eq "DESTROY") {
-                terraform plan  -destroy -out=tfplan -no-color -input=false
-                terraform apply -no-color -input=false -auto-approve tfplan
-              } elseif ($action -eq "APPLY") {
-                terraform plan  -out=tfplan -no-color -input=false
-                terraform apply -no-color -input=false -auto-approve tfplan
-                terraform output
-                terraform output -no-color -json | Out-File -FilePath tf-outputs.json -Encoding utf8
-              } else { throw "Unsupported TF_ACTION: $action" }
-            '''
+    stage('Outputs') {
+      steps {
+        dir('infra') {
+          withEnv(['PATH+TERRAFORM=C:\\binaries\\terraform']) {
+            bat 'terraform output -json'
           }
         }
       }
@@ -102,8 +109,8 @@ pipeline {
 
   post {
     always {
-      archiveArtifacts artifacts: "${TF_DIR}\\tfplan, ${TF_DIR}\\tf-outputs.json", allowEmptyArchive: true
-      cleanWs()
+      // Do NOT wrap in dir(); keep path relative to workspace to retain FilePath context
+      archiveArtifacts artifacts: 'infra/plan.tfplan', fingerprint: true, allowEmptyArchive: true
     }
   }
 }

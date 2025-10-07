@@ -1,38 +1,60 @@
+# --- Variables ---
 variable "region" {
   type    = string
   default = "ap-south-1"
 }
 
-variable "key_name" {
+variable "project" {
   type    = string
-  default = "one-project-key-pair"
+  default = "one-project"
 }
 
 variable "instance_type" {
   type    = string
-  default = "t3.small"
+  default = "t3.medium"
 }
 
-variable "allowed_ssh_cidrs" {
-  type        = list(string)
-  description = "CIDR blocks allowed to SSH (22)."
-  validation {
-    condition     = alltrue([for c in var.allowed_ssh_cidrs : can(cidrnetmask(c))])
-    error_message = "Each entry must be a valid CIDR (e.g., 203.0.113.10/32)."
-  }
+variable "subnet_id" {
+  type = string
 }
 
-variable "mysql_db" {
-  type    = string
-  default = "studentdb"
+variable "vpc_id" {
+  type = string
 }
 
-variable "mysql_user" {
-  type    = string
-  default = "studentapp"
+variable "key_name" {
+  type      = string
+  default   = null
+  nullable  = true
+  sensitive = false
+}
+
+variable "iam_instance_profile" {
+  type      = string
+  default   = null
+  nullable  = true
+}
+
+# Keep RDP open by default (you can restrict later to your office IPs)
+variable "rdp_cidrs" {
+  type    = list(string)
+  default = ["0.0.0.0/0"]
+}
+
+variable "mysql_root_password" {
+  type      = string
+  sensitive = true
 }
 
 variable "mysql_app_password" {
   type      = string
   sensitive = true
+}
+
+variable "common_tags" {
+  type = map(string)
+  default = {
+    Project   = "one-project"
+    ManagedBy = "Terraform"
+  }
 }

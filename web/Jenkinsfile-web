@@ -1,131 +1,95 @@
 pipeline {
   agent { label 'win-dev' }
-  options { timestamps() }
-  triggers { githubPush() }
+  options { disableConcurrentBuilds(); timestamps() }
 
   parameters {
-    string(
-      name: 'REMOTE_HOST',
-      defaultValue: 'ec2-xx-xx-xx-xx.ap-south-1.compute.amazonaws.com',
-      description: 'EC2 public DNS or IP (no http/https)'
-    )
-    string(
-      name: 'HEALTH_PATH',
-      defaultValue: '/',
-      description: 'Relative path for Web health check (should return HTTP 200-399)'
-    )
+    string(name: 'AWS_REGION', defaultValue: 'ap-south-1', description: 'AWS region')
+    string(name: 'EC2_INSTANCE_ID', defaultValue: '', description: 'EC2 instance ID (from infra outputs)')
+    string(name: 'ARTIFACT_BUCKET', defaultValue: 'one-project-artifacts-<your-uniq-suffix>', description: 'S3 bucket for deploy artifacts')
+    string(name: 'APP_REL_PATH', defaultValue: 'web', description: 'Relative path to React app folder')
+    string(name: 'APP_NAME', defaultValue: 'student-web', description: 'Bundle name prefix')
+    choice(name: 'NODE_MODE', choices: ['production','development'], description: 'NODE_ENV')
   }
 
   environment {
-    WEB_DIR   = 'web'
-    WEB_OUT   = 'web-dist'
-    PKG_ZIP   = 'web.zip'
-
-    REMOTE_USER = 'ubuntu'
-    DEPLOY_WEB  = '/var/www/app'
+    NODE_ENV = "${params.NODE_MODE}"
+    PATH = "C:\\Program Files\\nodejs;C:\\Program Files\\Amazon\\AWSCLIV2;${env:PATH}"
   }
 
   stages {
-    stage('Checkout') { steps { checkout scm } }
-
-    stage('Normalize Host') {
+    stage('Checkout') {
       steps {
-        script {
-          def host = (params.REMOTE_HOST ?: '').trim().replaceFirst('^https?://','').replaceAll('/+$','')
-          if (!host) error 'REMOTE_HOST is empty'
-          env.DEPLOY_HOST = host
-          env.HEALTH_URL  = "http://${host}${params.HEALTH_PATH ?: '/'}"
-          echo "Deploy target host: ${env.DEPLOY_HOST}"
-          echo "Health check URL:   ${env.HEALTH_URL}"
+        deleteDir()
+        checkout scm
+      }
+    }
+
+    stage('Install & Build') {
+      steps {
+        dir("${params.APP_REL_PATH}") {
+          // use cmd to avoid PowerShell execution policy on npm.ps1
+          bat "cmd /c npm --version"
+          bat "cmd /c npm install"
+          bat "cmd /c npm run build"
+          bat 'powershell -NoProfile -ExecutionPolicy Bypass -Command "Compress-Archive -Path dist\\* -DestinationPath web.zip -Force"'
+          archiveArtifacts artifacts: "${params.APP_REL_PATH}\\web.zip", fingerprint: true
         }
       }
     }
 
-    stage('Build Web (Vite)') {
+    stage('Upload to S3') {
       steps {
-        powershell """
-          Set-Location ${env.WEB_DIR}
-          node -v
-          npm -v
-
-          # ensure devDependencies (plugin-react) are present
-          $env:NPM_CONFIG_PRODUCTION = 'false'
-          if (Test-Path node_modules) { Remove-Item -Recurse -Force node_modules }
-          if (Test-Path package-lock.json) { npm ci --include=dev } else { npm install --include=dev }
-
-          npm ls @vitejs/plugin-react || (npm i -D @vitejs/plugin-react)
-          npm run build
-
-          New-Item -ItemType Directory -Force -Path ..\\${env.WEB_OUT} | Out-Null
-          Copy-Item -Recurse -Force dist\\* ..\\${env.WEB_OUT}\\
-        """
-      }
-    }
-
-    stage('Package') {
-      steps {
-        powershell """
-          if (Test-Path ${env.PKG_ZIP}) { Remove-Item -Force ${env.PKG_ZIP} }
-          Compress-Archive -Path ${env.WEB_OUT}\\* -DestinationPath ${env.PKG_ZIP} -Force
-        """
-      }
-    }
-
-    stage('Upload & Deploy') {
-      steps {
-        sshagent (credentials: ['ec2_ssh_key']) {
-          powershell """
-            \$env:GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
-            scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null `
-              ${env.PKG_ZIP} ${env.REMOTE_USER}@${env.DEPLOY_HOST}:/tmp/${env.PKG_ZIP}
-
-            ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null `
-              ${env.REMOTE_USER}@${env.DEPLOY_HOST} `
-              'set -euxo pipefail;
-               sudo mkdir -p ${env.DEPLOY_WEB};
-               rm -rf /tmp/web_deploy && mkdir -p /tmp/web_deploy;
-               unzip -o /tmp/${env.PKG_ZIP} -d /tmp/web_deploy;
-               sudo rm -rf ${env.DEPLOY_WEB}/* || true;
-               sudo cp -r /tmp/web_deploy/* ${env.DEPLOY_WEB}/;
-               sudo chown -R www-data:www-data ${env.DEPLOY_WEB};
-               sudo nginx -t && sudo systemctl reload nginx;
-               rm -rf /tmp/web_deploy /tmp/${env.PKG_ZIP};
-              '
-          """
-        }
-      }
-    }
-
-    stage('Health Check (mark UNSTABLE on failure)') {
-      steps {
-        catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
-          powershell """
-            \$ErrorActionPreference = 'Continue'
-            \$uri = '${env.HEALTH_URL}'
-            Write-Host "Polling health: \$uri"
-            \$ok = \$false
-            for (\$i=1; \$i -le 15; \$i++) {
-              try {
-                \$resp = Invoke-WebRequest -Uri \$uri -UseBasicParsing -TimeoutSec 5
-                if (\$resp.StatusCode -ge 200 -and \$resp.StatusCode -lt 400) {
-                  Write-Host "Health OK: " \$resp.StatusCode
-                  \$ok = \$true; break
-                } else {
-                  Write-Host "Health bad code: " \$resp.StatusCode
-                }
-              } catch {
-                Write-Host "Attempt \$i failed: \$($_.Exception.Message)"
-              }
-              Start-Sleep -Seconds 4
+        withCredentials([[$class:'AmazonWebServicesCredentialsBinding', credentialsId:'aws_secrets_shankar']]) {
+          dir("${params.APP_REL_PATH}") {
+            script {
+              def key = "web/${params.APP_NAME}-${env.BUILD_NUMBER}.zip"
+              bat "aws s3 cp web.zip s3://${params.ARTIFACT_BUCKET}/${key} --region ${params.AWS_REGION}"
+              env.S3_KEY = key
             }
-            if (-not \$ok) { throw "Web health check failed for \$uri" }
-          """
+          }
         }
       }
     }
-  }
 
-  post {
-    always { archiveArtifacts artifacts: "${WEB_OUT}/**/*, ${PKG_ZIP}", allowEmptyArchive: true }
+    stage('Deploy via SSM') {
+      steps {
+        withCredentials([[$class:'AmazonWebServicesCredentialsBinding', credentialsId:'aws_secrets_shankar']]) {
+          script {
+            def ps = """
+                $ErrorActionPreference = 'Stop'
+                aws --version | Out-Null
+                \$bucket='${params.ARTIFACT_BUCKET}'
+                \$key='${env.S3_KEY}'
+                \$zip='C:\\\\deploy\\\\incoming\\\\web.zip'
+                if (Test-Path \$zip) { Remove-Item \$zip -Force }
+                aws s3 cp "s3://\$bucket/\$key" \$zip --region ${params.AWS_REGION}
+
+                # Unzip and swap IIS site content
+                \$temp = "C:\\\\deploy\\\\incoming\\\\web_unzip"
+                if (Test-Path \$temp) { Remove-Item \$temp -Recurse -Force }
+                New-Item -ItemType Directory -Path \$temp | Out-Null
+                Add-Type -AssemblyName System.IO.Compression.FileSystem
+                [System.IO.Compression.ZipFile]::ExtractToDirectory(\$zip,\$temp)
+
+                # Replace site root
+                Import-Module WebAdministration
+                Stop-WebSite -Name "one-project"
+                if (Test-Path "C:\\\\deploy\\\\web") { Remove-Item "C:\\\\deploy\\\\web\\*" -Recurse -Force -ErrorAction SilentlyContinue }
+                Copy-Item "\$temp\\*" "C:\\\\deploy\\\\web" -Recurse -Force
+                Start-WebSite -Name "one-project"
+            """
+            bat """
+              aws ssm send-command ^
+                --instance-ids ${params.EC2_INSTANCE_ID} ^
+                --document-name "AWS-RunPowerShellScript" ^
+                --parameters commands="${ps.replace('"','\\"').replace("\n","`n")}" ^
+                --region ${params.AWS_REGION} ^
+                --query "Command.CommandId" --output text > cmdid.txt
+            """
+            bat 'set /p CMDID=<cmdid.txt & echo SSM CommandId=%CMDID%'
+          }
+        }
+      }
+    }
   }
 }

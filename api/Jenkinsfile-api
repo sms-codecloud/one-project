@@ -1,125 +1,128 @@
 pipeline {
-  agent { label 'win-dev' }
-  options { timestamps() }
-  triggers { githubPush() } // or pollSCM
+  agent { label 'win-dev' } // your Windows agent label
+
+  options {
+    timestamps()
+    ansiColor('xterm')
+    disableConcurrentBuilds()
+  }
 
   parameters {
-    string(
-      name: 'REMOTE_HOST',
-      defaultValue: 'ec2-xx-xx-xx-xx.ap-south-1.compute.amazonaws.com',
-      description: 'EC2 public DNS or IP (no http/https)'
-    )
-    string(
-      name: 'HEALTH_PATH',
-      defaultValue: '/api/health',
-      description: 'Relative path for API health check (should return HTTP 200-399)'
-    )
+    string(name: 'AWS_REGION',      defaultValue: 'ap-south-1',  description: 'AWS region')
+    string(name: 'AWS_CREDS_ID',    defaultValue: 'aws_secrets_shankar', description: 'Jenkins AWS creds ID')
+    string(name: 'EC2_INSTANCE_ID', defaultValue: '',            description: 'Target Windows EC2 instance id (SSM)')
+    string(name: 'S3_BUCKET',       defaultValue: 'arj-bootcamp',description: 'Artifact bucket')
+    string(name: 'S3_KEY',          defaultValue: 'api/student-api-11.zip', description: 'Artifact key (zip)')
+    string(name: 'MYSQL_APP_PASSWORD', defaultValue: '', description: 'MySQL password for student_user (as secret text in prod)')
+    string(name: 'PROJECT_REL',     defaultValue: 'one-project/api', description: 'API project path (relative to repo root)')
+    choice(name: 'CONFIG',          choices: ['Release','Debug'], description: 'Build configuration')
+    booleanParam(name: 'RUN_TESTS', defaultValue: true, description: 'Run tests if found')
   }
 
   environment {
-    API_DIR  = 'api'
-    API_OUT  = 'api-publish'
-    PKG_ZIP  = 'api.zip'
-
-    REMOTE_USER = 'ubuntu'
-    DEPLOY_API  = '/var/www/api'
-    SERVICE     = 'studentapi'
+    DOTNET_CLI_TELEMETRY_OPTOUT       = '1'
+    DOTNET_SKIP_FIRST_TIME_EXPERIENCE = '1'
+    PUBLISH_DIR  = 'publish'
+    ARTIFACT_ZIP = 'student-api.zip'
   }
 
   stages {
-    stage('Checkout') { steps { checkout scm } }
-
-    stage('Normalize Host') {
+    stage('Checkout') {
       steps {
-        script {
-          def host = (params.REMOTE_HOST ?: '').trim().replaceFirst('^https?://','').replaceAll('/+$','')
-          if (!host) error 'REMOTE_HOST is empty'
-          env.DEPLOY_HOST = host
-          env.HEALTH_URL  = "http://${host}${params.HEALTH_PATH ?: '/api/health'}"
-          echo "Deploy target host: ${env.DEPLOY_HOST}"
-          echo "Health check URL:   ${env.HEALTH_URL}"
-        }
+        checkout scm
+        bat 'ver'
       }
     }
 
-    stage('Build & Publish') {
+    stage('Restore & Build') {
       steps {
-        powershell """
-          Set-Location ${env.API_DIR}
-          dotnet --info
-          dotnet restore
-          dotnet publish -c Release -o ..\\${env.API_OUT}
-        """
-      }
-    }
-
-    stage('Package') {
-      steps {
-        powershell """
-          if (Test-Path ${env.PKG_ZIP}) { Remove-Item -Force ${env.PKG_ZIP} }
-          Compress-Archive -Path ${env.API_OUT}\\* -DestinationPath ${env.PKG_ZIP} -Force
-        """
-      }
-    }
-
-    stage('Upload & Deploy') {
-      steps {
-        sshagent (credentials: ['ec2_ssh_key']) {
+        dir("${params.PROJECT_REL}") {
           powershell """
-            \$env:GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
-            scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null `
-              ${env.PKG_ZIP} ${env.REMOTE_USER}@${env.DEPLOY_HOST}:/tmp/${env.PKG_ZIP}
-
-            ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null `
-              ${env.REMOTE_USER}@${env.DEPLOY_HOST} `
-              'set -euxo pipefail;
-               sudo systemctl stop ${env.SERVICE} || true;
-               sudo mkdir -p ${env.DEPLOY_API};
-               rm -rf /tmp/api_deploy && mkdir -p /tmp/api_deploy;
-               unzip -o /tmp/${env.PKG_ZIP} -d /tmp/api_deploy;
-               sudo rm -rf ${env.DEPLOY_API}/* || true;
-               sudo cp -r /tmp/api_deploy/* ${env.DEPLOY_API}/;
-               sudo chown -R www-data:www-data ${env.DEPLOY_API};
-               sudo systemctl daemon-reload;
-               sudo systemctl start ${env.SERVICE};
-               sudo systemctl enable ${env.SERVICE};
-               rm -rf /tmp/api_deploy /tmp/${env.PKG_ZIP};
-              '
+            \$ErrorActionPreference = 'Stop'
+            dotnet --info
+            dotnet restore
+            dotnet build -c ${params.CONFIG} --no-restore
           """
         }
       }
     }
 
-    stage('Health Check (mark UNSTABLE on failure)') {
+    stage('Test') {
+      when { expression { return params.RUN_TESTS } }
       steps {
-        catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
+        powershell '''
+          $tests = Get-ChildItem -Recurse -Filter *.csproj | Where-Object { $_.FullName -match '(?i)test|tests' }
+          if ($tests) {
+            foreach ($t in $tests) { dotnet test $t.FullName -c $env:CONFIG --no-build --logger "trx;LogFileName=TestResults.trx" }
+          } else { Write-Host "No tests found." }
+        '''
+      }
+      post {
+        always { junit allowEmptyResults: true, testResults: '**/TestResults/*.xml' }
+      }
+    }
+
+    stage('Publish & Package') {
+      steps {
+        dir("${params.PROJECT_REL}") {
           powershell """
-            \$ErrorActionPreference = 'Continue'
-            \$uri = '${env.HEALTH_URL}'
-            Write-Host "Polling health: \$uri"
-            \$ok = \$false
-            for (\$i=1; \$i -le 15; \$i++) {
-              try {
-                \$resp = Invoke-WebRequest -Uri \$uri -UseBasicParsing -TimeoutSec 5
-                if (\$resp.StatusCode -ge 200 -and \$resp.StatusCode -lt 400) {
-                  Write-Host "Health OK: " \$resp.StatusCode
-                  \$ok = \$true; break
-                } else {
-                  Write-Host "Health bad code: " \$resp.StatusCode
-                }
-              } catch {
-                Write-Host "Attempt \$i failed: \$($_.Exception.Message)"
-              }
-              Start-Sleep -Seconds 4
-            }
-            if (-not \$ok) { throw "API health check failed for \$uri" }
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue '${env:PUBLISH_DIR}'
+            dotnet publish -c ${params.CONFIG} -o '${env:PUBLISH_DIR}' --no-restore
           """
         }
+        dir("${params.PROJECT_REL}\\${env:PUBLISH_DIR}") {
+          powershell """
+            if (!(Test-Path 'StudentApi.dll')) { throw 'StudentApi.dll not found in publish output.' }
+            if (Test-Path '${env:WORKSPACE}\\${env:ARTIFACT_ZIP}') { Remove-Item -Force '${env:WORKSPACE}\\${env:ARTIFACT_ZIP}' }
+            Compress-Archive -Path * -DestinationPath '${env:WORKSPACE}\\${env:ARTIFACT_ZIP}'
+          """
+        }
+        archiveArtifacts artifacts: "${env.ARTIFACT_ZIP}", onlyIfSuccessful: true
+      }
+    }
+
+    stage('Upload to S3') {
+      steps {
+        withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: params.AWS_CREDS_ID]]) {
+          powershell """
+            aws --version
+            aws s3 cp '${env:WORKSPACE}\\${env:ARTIFACT_ZIP}' s3://${params.S3_BUCKET}/${params.S3_KEY} --region ${params.AWS_REGION} --only-show-errors
+          """
+        }
+      }
+    }
+
+    stage('Deploy via SSM (call script)') {
+      steps {
+        withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: params.AWS_CREDS_ID]]) {
+          powershell """
+            \$ErrorActionPreference = 'Stop'
+            \$script = Join-Path '${env.WORKSPACE}' '${params.PROJECT_REL}\\deploy-api-ssm.ps1'
+            if (!(Test-Path \$script)) { throw "deploy-api-ssm.ps1 not found at \$script" }
+
+            # Call the deployment script
+            powershell -ExecutionPolicy Bypass -File "\$script" `
+              -InstanceId "${params.EC2_INSTANCE_ID}" `
+              -Region     "${params.AWS_REGION}" `
+              -Bucket     "${params.S3_BUCKET}" `
+              -Key        "${params.S3_KEY}" `
+              -MySQLAppPassword "${params.MYSQL_APP_PASSWORD}"
+          """
+        }
+      }
+    }
+
+    stage('Summary') {
+      steps {
+        echo "Deployed ${env.ARTIFACT_ZIP} to EC2 ${params.EC2_INSTANCE_ID} via SSM."
+        echo "URL: http://<instance-public-dns>/api (site name: one-project, app: /api)"
       }
     }
   }
 
   post {
-    always { archiveArtifacts artifacts: "${API_OUT}/**/*, ${PKG_ZIP}", allowEmptyArchive: true }
+    failure {
+      echo "Build failed. Check console logs."
+    }
   }
 }
