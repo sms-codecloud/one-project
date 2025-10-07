@@ -80,13 +80,16 @@ pipeline {
 
             // Zip safely
             bat '''
+              @echo off
               if exist web.zip del /q web.zip
               powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-                "$bd = $env:BUILD_DIR.Trim(); if(!(Test-Path $bd)){throw \\"Build dir not found: $bd\\"}; Compress-Archive -Path (Join-Path $bd '*') -DestinationPath web.zip -Force"
+                "$bd = if (Test-Path 'dist') { 'dist' } elseif (Test-Path 'build') { 'build' } else { $null }; ^
+                if (-not $bd) { throw 'No dist/ or build/ folder found.' }; ^
+                Compress-Archive -Path (Join-Path $bd '*') -DestinationPath 'web.zip' -Force"
               if not exist web.zip ( echo ERROR: web.zip not created.& exit /b 3 )
-              echo --- ZIP created ---
               dir web.zip
             '''
+
 
             // Archive relative to current dir (no subpath)
             archiveArtifacts artifacts: 'web.zip', fingerprint: true
