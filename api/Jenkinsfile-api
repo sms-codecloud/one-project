@@ -4,7 +4,7 @@ pipeline {
   options { timestamps(); ansiColor('xterm'); disableConcurrentBuilds() }
 
   parameters {
-    string(name: 'PROJECT_REL', defaultValue: 'one-project/api', description: 'Path to API project within repo')
+    string(name: 'PROJECT_REL', defaultValue: 'api', description: 'Path within repo to the API project or folder')
     choice(name: 'CONFIG', choices: ['Release','Debug'], description: 'Build configuration')
     booleanParam(name: 'RUN_TESTS', defaultValue: true, description: 'Run tests')
     string(name: 'AWS_REGION', defaultValue: 'ap-south-1', description: 'AWS region')
@@ -71,17 +71,47 @@ pipeline {
     }
 
     stage('Restore & Build (local validation)') {
-      steps {
-        dir("${env.BUILD_DIR}\\repo\\${params.PROJECT_REL}") {
-          powershell """
-            \$ErrorActionPreference = 'Stop'
-            dotnet --info
-            dotnet restore
-            dotnet build -c ${params.CONFIG} --no-restore
-          """
+  steps {
+    dir("${env.BUILD_DIR}\\repo") {
+      powershell """
+        $ErrorActionPreference = 'Stop'
+
+        # 0) Show where we are + helpful listing
+        Write-Host "Repo root: $(Get-Location)"
+        Write-Host "PROJECT_REL: ${params.PROJECT_REL}"
+        if (!(Test-Path '${params.PROJECT_REL}')) {
+          Write-Host 'Contents of repo root:'; Get-ChildItem -Force
+          throw 'PROJECT_REL path does not exist. Fix the parameter so it points under the repo root.'
         }
-      }
+
+        $base = Join-Path (Get-Location) '${params.PROJECT_REL}'
+
+        # 1) Find a solution or project inside PROJECT_REL (prefer .sln)
+        $sln = Get-ChildItem -Path $base -Recurse -Filter *.sln | Select-Object -First 1
+        $csproj = $null
+        if (-not $sln) {
+          $csproj = Get-ChildItem -Path $base -Recurse -Filter *.csproj | Select-Object -First 1
+        }
+
+        if ($sln) {
+          Write-Host "Using solution: $($sln.FullName)"
+          dotnet --info
+          dotnet restore "$($sln.FullName)"
+          dotnet build "$($sln.FullName)" -c ${params.CONFIG} --no-restore
+        } elseif ($csproj) {
+          Write-Host "Using project: $($csproj.FullName)"
+          dotnet --info
+          dotnet restore "$($csproj.FullName)"
+          dotnet build "$($csproj.FullName)" -c ${params.CONFIG} --no-restore
+        } else {
+          Write-Host "Listing of PROJECT_REL:"; Get-ChildItem -Recurse -Force -Path $base
+          throw 'No .sln or .csproj found under PROJECT_REL. Adjust PROJECT_REL to the folder that contains your .sln/.csproj.'
+        }
+      """
     }
+  }
+}
+
 
     stage('Test') {
       when { expression { return params.RUN_TESTS } }
@@ -101,26 +131,33 @@ pipeline {
       post { always { junit allowEmptyResults: true, testResults: '**/TestResults/*.xml' } }
     }
 
-    stage('Publish & Package') {
-      steps {
-        dir("${env.BUILD_DIR}\\repo\\${params.PROJECT_REL}") {
-          powershell """
-            \$ErrorActionPreference = 'Stop'
-            if (Test-Path '${env.PUBLISH_DIR}') { Remove-Item -Recurse -Force '${env.PUBLISH_DIR}' }
-            dotnet publish -c ${params.CONFIG} -o '${env.PUBLISH_DIR}' --no-restore
-          """
-        }
-        dir("${env.BUILD_DIR}\\repo\\${params.PROJECT_REL}\\${env.PUBLISH_DIR}") {
-          powershell """
-            \$ErrorActionPreference = 'Stop'
-            if (!(Test-Path 'StudentApi.dll')) { throw 'StudentApi.dll not found in publish output.' }
-            $zip = Join-Path '${env.BUILD_DIR}' '${env.ARTIFACT_ZIP}'
-            if (Test-Path $zip) { Remove-Item -Force $zip }
-            Compress-Archive -Path * -DestinationPath $zip
-          """
-        }
-      }
+stage('Publish & Package') {
+  steps {
+    dir("${env.BUILD_DIR}\\repo") {
+      powershell """
+        $ErrorActionPreference = 'Stop'
+        $base = Join-Path (Get-Location) '${params.PROJECT_REL}'
+        $proj = Get-ChildItem -Path $base -Recurse -Filter *.csproj | Select-Object -First 1
+        if (-not $proj) { throw 'No .csproj found for publish.' }
+
+        $projDir = Split-Path -Parent $proj.FullName
+        Set-Location $projDir
+
+        if (Test-Path '${env:PUBLISH_DIR}') { Remove-Item -Recurse -Force '${env:PUBLISH_DIR}' }
+        dotnet publish "$($proj.FullName)" -c ${params.CONFIG} -o '${env:PUBLISH_DIR}' --no-restore
+
+        Set-Location '${env:PUBLISH_DIR}'
+        if (!(Test-Path '*.dll')) { throw 'No DLLs in publish output; publish likely failed.' }
+
+        $zip = Join-Path '${env:BUILD_DIR}' '${env:ARTIFACT_ZIP}'
+        if (Test-Path $zip) { Remove-Item -Force $zip }
+        Compress-Archive -Path * -DestinationPath $zip
+        Write-Host "Packaged: $zip"
+      """
     }
+  }
+}
+
 
     stage('Upload to S3') {
       steps {
