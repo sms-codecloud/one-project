@@ -70,7 +70,7 @@ pipeline {
             }
 
             // Zip build output (Vite=dist, CRA=build)
-            bat '''
+            bat """
               if exist dist ( set "BUILD_DIR=dist" ) else ( set "BUILD_DIR=build" )
               for /f "tokens=* delims= " %%A in ("%BUILD_DIR%") do set "BUILD_DIR=%%~A"
               echo BUILD_DIR=[%BUILD_DIR%]
@@ -79,7 +79,7 @@ pipeline {
               powershell -NoProfile -ExecutionPolicy Bypass -Command ^
                 "$bd = $env:BUILD_DIR.Trim(); Compress-Archive -Path (Join-Path $bd '*') -DestinationPath web.zip -Force"
               dir web.zip
-            '''
+            """
             archiveArtifacts artifacts: 'web.zip', fingerprint: true
           }
         }
@@ -113,56 +113,57 @@ pipeline {
                 error "API_S3_KEY is required (the S3 key to api.zip from your API pipeline)."
               }
 
+              // PowerShell to execute on EC2 (deploy web + api to IIS)
               def ps = """
-\$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Stop'
 Import-Module WebAdministration
 aws --version | Out-Null
 
 # Inputs
-\$region    = '${params.AWS_REGION}'
-\$bucket    = '${params.ARTIFACT_BUCKET}'
-\$webKey    = '${env.S3_KEY}'
-\$apiKey    = '${params.API_S3_KEY}'
+$region    = '${params.AWS_REGION}'
+$bucket    = '${params.ARTIFACT_BUCKET}'
+$webKey    = '${env.S3_KEY}'
+$apiKey    = '${params.API_S3_KEY}'
 
-\$siteName  = '${params.IIS_SITE_NAME}'
-\$siteRoot  = '${params.IIS_SITE_ROOT.replace('\\','\\\\')}'
-\$apiRoot   = '${params.IIS_API_ROOT.replace('\\','\\\\')}'
-\$appPool   = '${params.IIS_APP_POOL}'
+$siteName  = '${params.IIS_SITE_NAME}'
+$siteRoot  = '${params.IIS_SITE_ROOT.replace('\\','\\\\')}'
+$apiRoot   = '${params.IIS_API_ROOT.replace('\\','\\\\')}'
+$appPool   = '${params.IIS_APP_POOL}'
 
-\$inbox     = 'C:\\\\deploy\\\\incoming'
-\$webZip    = Join-Path \$inbox 'web.zip'
-\$apiZip    = Join-Path \$inbox 'api.zip'
-\$webTmp    = Join-Path \$inbox 'web_unzip'
-\$apiTmp    = Join-Path \$inbox 'api_unzip'
+$inbox     = 'C:\\\\deploy\\\\incoming'
+$webZip    = Join-Path $inbox 'web.zip'
+$apiZip    = Join-Path $inbox 'api.zip'
+$webTmp    = Join-Path $inbox 'web_unzip'
+$apiTmp    = Join-Path $inbox 'api_unzip'
 
 # Ensure folders
-New-Item -ItemType Directory -Force -Path \$inbox    | Out-Null
-New-Item -ItemType Directory -Force -Path \$siteRoot | Out-Null
-New-Item -ItemType Directory -Force -Path \$apiRoot  | Out-Null
+New-Item -ItemType Directory -Force -Path $inbox    | Out-Null
+New-Item -ItemType Directory -Force -Path $siteRoot | Out-Null
+New-Item -ItemType Directory -Force -Path $apiRoot  | Out-Null
 
 # Fetch artifacts
-if (Test-Path \$webZip) { Remove-Item \$webZip -Force }
-if (Test-Path \$apiZip) { Remove-Item \$apiZip -Force }
-aws s3 cp "s3://\$bucket/\$webKey" \$webZip --region \$region
-aws s3 cp "s3://\$bucket/\$apiKey" \$apiZip --region \$region
+if (Test-Path $webZip) { Remove-Item $webZip -Force }
+if (Test-Path $apiZip) { Remove-Item $apiZip -Force }
+aws s3 cp "s3://$bucket/$webKey" $webZip --region $region
+aws s3 cp "s3://$bucket/$apiKey" $apiZip --region $region
 
 # Unzip fresh
-foreach (\$p in @(\$webTmp,\$apiTmp)) { if (Test-Path \$p) { Remove-Item \$p -Recurse -Force }; New-Item -ItemType Directory -Path \$p | Out-Null }
+foreach ($p in @($webTmp,$apiTmp)) { if (Test-Path $p) { Remove-Item $p -Recurse -Force }; New-Item -ItemType Directory -Path $p | Out-Null }
 Add-Type -AssemblyName System.IO.Compression.FileSystem
-[System.IO.Compression.ZipFile]::ExtractToDirectory(\$webZip, \$webTmp)
-[System.IO.Compression.ZipFile]::ExtractToDirectory(\$apiZip, \$apiTmp)
+[System.IO.Compression.ZipFile]::ExtractToDirectory($webZip, $webTmp)
+[System.IO.Compression.ZipFile]::ExtractToDirectory($apiZip, $apiTmp)
 
 # Stop site if exists
-if (Get-Website -Name \$siteName -ErrorAction SilentlyContinue) {
-  Stop-WebSite -Name \$siteName -ErrorAction SilentlyContinue
+if (Get-Website -Name $siteName -ErrorAction SilentlyContinue) {
+  Stop-WebSite -Name $siteName -ErrorAction SilentlyContinue
 }
 
 # Deploy WEB (React)
-if (Test-Path \$siteRoot) { Get-ChildItem -Path \$siteRoot -Force | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue }
-Copy-Item "\$webTmp\\*" \$siteRoot -Recurse -Force
+if (Test-Path $siteRoot) { Get-ChildItem -Path $siteRoot -Force | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue }
+Copy-Item "$webTmp\\*" $siteRoot -Recurse -Force
 
 # SPA web.config fallback if missing
-\$spaConfig = @"
+$spaConfig = @"
 <?xml version="1.0" encoding="utf-8"?>
 <configuration>
   <system.webServer>
@@ -184,47 +185,47 @@ Copy-Item "\$webTmp\\*" \$siteRoot -Recurse -Force
   </system.webServer>
 </configuration>
 "@
-if (-not (Test-Path (Join-Path \$siteRoot 'web.config'))) {
-  \$spaConfig | Out-File -FilePath (Join-Path \$siteRoot 'web.config') -Encoding UTF8 -Force
+if (-not (Test-Path (Join-Path $siteRoot 'web.config'))) {
+  $spaConfig | Out-File -FilePath (Join-Path $siteRoot 'web.config') -Encoding UTF8 -Force
 }
 
 # Deploy API (published output with ASP.NET Core web.config inside)
-if (Test-Path \$apiRoot) { Get-ChildItem -Path \$apiRoot -Force | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue }
-Copy-Item "\$apiTmp\\*" \$apiRoot -Recurse -Force
+if (Test-Path $apiRoot) { Get-ChildItem -Path $apiRoot -Force | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue }
+Copy-Item "$apiTmp\\*" $apiRoot -Recurse -Force
 
 # Ensure App Pool (No Managed Code)
-if (-not (Test-Path IIS:\\AppPools\\\$appPool)) {
-  New-Item IIS:\\AppPools\\\$appPool | Out-Null
-  Set-ItemProperty IIS:\\AppPools\\\$appPool -Name managedRuntimeVersion -Value ''
-  Set-ItemProperty IIS:\\AppPools\\\$appPool -Name startMode -Value 'AlwaysRunning'
+if (-not (Test-Path IIS:\\AppPools\\$appPool)) {
+  New-Item IIS:\\AppPools\\$appPool | Out-Null
+  Set-ItemProperty IIS:\\AppPools\\$appPool -Name managedRuntimeVersion -Value ''
+  Set-ItemProperty IIS:\\AppPools\\$appPool -Name startMode -Value 'AlwaysRunning'
 } else {
-  Set-ItemProperty IIS:\\AppPools\\\$appPool -Name managedRuntimeVersion -Value ''
+  Set-ItemProperty IIS:\\AppPools\\$appPool -Name managedRuntimeVersion -Value ''
 }
 
 # Ensure Site
-if (-not (Get-Website -Name \$siteName -ErrorAction SilentlyContinue)) {
-  New-Website -Name \$siteName -PhysicalPath \$siteRoot -Port 80 -Force | Out-Null
+if (-not (Get-Website -Name $siteName -ErrorAction SilentlyContinue)) {
+  New-Website -Name $siteName -PhysicalPath $siteRoot -Port 80 -Force | Out-Null
 } else {
-  Set-ItemProperty IIS:\\Sites\\\$siteName -Name physicalPath -Value \$siteRoot
+  Set-ItemProperty IIS:\\Sites\\$siteName -Name physicalPath -Value $siteRoot
 }
 
 # Ensure /api application under the site
-\$apiAppPath = "IIS:\\Sites\\\$siteName\\api"
-if (-not (Test-Path \$apiAppPath)) {
-  New-WebApplication -Site \$siteName -Name 'api' -PhysicalPath \$apiRoot -ApplicationPool \$appPool | Out-Null
+$apiAppPath = "IIS:\\Sites\\$siteName\\api"
+if (-not (Test-Path $apiAppPath)) {
+  New-WebApplication -Site $siteName -Name 'api' -PhysicalPath $apiRoot -ApplicationPool $appPool | Out-Null
 } else {
-  Set-ItemProperty \$apiAppPath -Name physicalPath -Value \$apiRoot
-  Set-ItemProperty \$apiAppPath -Name applicationPool -Value \$appPool
+  Set-ItemProperty $apiAppPath -Name physicalPath -Value $apiRoot
+  Set-ItemProperty $apiAppPath -Name applicationPool -Value $appPool
 }
 
 # Permissions (read/execute for IIS_IUSRS)
-& icacls \$siteRoot /grant "IIS_IUSRS:(OI)(CI)RX" /T | Out-Null
-& icacls \$apiRoot  /grant "IIS_IUSRS:(OI)(CI)RX" /T | Out-Null
+& icacls $siteRoot /grant "IIS_IUSRS:(OI)(CI)RX" /T | Out-Null
+& icacls $apiRoot  /grant "IIS_IUSRS:(OI)(CI)RX" /T | Out-Null
 
 # Start site
-Start-WebSite -Name \$siteName
+Start-WebSite -Name $siteName
 
-Write-Host "✓ Deployed web to \$siteRoot and API to \$apiRoot under site '\$siteName' (/api)."
+Write-Host "✓ Deployed web to $siteRoot and API to $apiRoot under site '$siteName' (/api)."
 """.trim()
 
               // Build {"commands":[...]} JSON for SSM
@@ -233,7 +234,7 @@ Write-Host "✓ Deployed web to \$siteRoot and API to \$apiRoot under site '\$si
               def json    = '{"commands":["' + escaped.join('","') + '"]}'
               writeFile file: 'params_both.json', text: json
 
-              // --- Send command & capture only the CommandId (no echo noise) ---
+              // --- Send command & capture clean CommandId ---
               def cmdId = bat(
                 returnStdout: true,
                 script: """
@@ -251,7 +252,7 @@ Write-Host "✓ Deployed web to \$siteRoot and API to \$apiRoot under site '\$si
               ).trim()
               echo "SSM CommandId=${cmdId}"
 
-              // --- Poll status until terminal state ---
+              // --- Poll status until terminal ---
               String status = ''
               int maxLoops = 60
               for (int i = 0; i < maxLoops; i++) {
@@ -267,7 +268,7 @@ Write-Host "✓ Deployed web to \$siteRoot and API to \$apiRoot under site '\$si
                 sleep time: 5, unit: 'SECONDS'
               }
 
-              // --- Fetch stdout/stderr from the invocation ---
+              // --- Fetch stdout/stderr ---
               def ssmOut = bat(
                 returnStdout: true,
                 script: """
@@ -297,6 +298,7 @@ Write-Host "✓ Deployed web to \$siteRoot and API to \$apiRoot under site '\$si
               if (status != 'Success') {
                 error "SSM command ${cmdId} completed with status=${status}"
               }
+            }
           }
         }
       }
