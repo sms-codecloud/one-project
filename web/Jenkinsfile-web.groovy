@@ -107,11 +107,11 @@ pipeline {
                 "\$siteRoot='${siteRoot}'",
                 "\$apiRoot='${apiRoot}'",
                 "\$appPool='${appPool}'",
-                "\$inbox='C:\\\\deploy\\\\incoming'",
-                "\$wzip=Join-Path \$inbox 'web.zip'",
-                "\$azip=Join-Path \$inbox 'api.zip'",
-                "\$wtmp=Join-Path \$inbox 'web_unzip'",
-                "\$atmp=Join-Path \$inbox 'api_unzip'",
+                '\$inbox=''C:\\\\deploy\\\\incoming''',
+                '\$wzip=Join-Path $inbox ''web.zip''',
+                '\$azip=Join-Path $inbox ''api.zip''',
+                '\$wtmp=Join-Path $inbox ''web_unzip''',
+                '\$atmp=Join-Path $inbox ''api_unzip''',
 
                 // ensure dirs & download
                 'New-Item -ItemType Directory -Force -Path $inbox | Out-Null',
@@ -138,12 +138,12 @@ pipeline {
 
                 // deploy api
                 'if (Test-Path $apiRoot) { Get-ChildItem -Path $apiRoot -Force | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue }',
-                'Copy-Item "$atmp\*" $apiRoot -Recurse -Force',
+                'Copy-Item "$atmp\\*" $apiRoot -Recurse -Force',
 
                 // app pool & site
-                'if (!(Test-Path IIS:\AppPools\$appPool)) { New-Item IIS:\AppPools\$appPool | Out-Null; Set-ItemProperty IIS:\AppPools\$appPool -Name managedRuntimeVersion -Value '''' } else { Set-ItemProperty IIS:\AppPools\$appPool -Name managedRuntimeVersion -Value '''' }',
-                'if (!(Get-Website -Name $site -ErrorAction SilentlyContinue)) { New-Website -Name $site -PhysicalPath $siteRoot -Port 80 -Force | Out-Null } else { Set-ItemProperty IIS:\Sites\$site -Name physicalPath -Value $siteRoot }',
-                '$apiApp = "IIS:\Sites\$site\api"',
+                'if (!(Test-Path IIS:\\\\AppPools\\\\$appPool)) { New-Item IIS:\\\\AppPools\\\\$appPool | Out-Null; Set-ItemProperty IIS:\\\\AppPools\\\\$appPool -Name managedRuntimeVersion -Value '''' } else { Set-ItemProperty IIS:\\\\AppPools\\\\$appPool -Name managedRuntimeVersion -Value '''' }',
+                'if (!(Get-Website -Name $site -ErrorAction SilentlyContinue)) { New-Website -Name $site -PhysicalPath $siteRoot -Port 80 -Force | Out-Null } else { Set-ItemProperty IIS:\\\\Sites\\\\$site -Name physicalPath -Value $siteRoot }',
+                '\$apiApp = "IIS:\\\\Sites\\\\$site\\\\api"',
                 'if (!(Test-Path $apiApp)) { New-WebApplication -Site $site -Name ''api'' -PhysicalPath $apiRoot -ApplicationPool $appPool | Out-Null } else { Set-ItemProperty $apiApp -Name physicalPath -Value $apiRoot; Set-ItemProperty $apiApp -Name applicationPool -Value $appPool }',
 
                 // permissions & start
