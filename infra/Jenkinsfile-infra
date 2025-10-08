@@ -3,7 +3,7 @@ pipeline {
   options { disableConcurrentBuilds(); timestamps() }
 
   parameters {
-    choice(name: 'TF_ACTION', choices: ['APPLY','DESTROY'], description: 'Terraform action')
+    choice(name: 'TF_ACTION', choices: ['APPLY','PLAN','DESTROY'], description: 'Terraform action')
     string(name: 'AWS_REGION',  defaultValue: 'ap-south-1', description: 'Region')
     choice(name: 'INSTANCE_TYPE', choices: ['t3.small','t3.micro'], description: 'EC2 size')
     string(name: 'KEY_NAME',    defaultValue: '', description: 'EC2 key pair (leave empty to rely on SSM)')
@@ -16,7 +16,7 @@ pipeline {
   }
 
   stages {
-    stage('Terraform Init/Plan/Apply') {
+    stage('Terraform apply/Plan/destroy') {
       steps {
         withCredentials([
           [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws_secrets_shankar']
@@ -45,16 +45,25 @@ pipeline {
               terraform init -reconfigure -upgrade -no-color
               if errorlevel 1 exit /b %errorlevel%
 
+              if /I "%TF_ACTION%"=="PLAN" (
+                terraform plan %TF_ARGS% -out=plan.tfplan -no-color -input=false
+                if errorlevel 1 exit /b %errorlevel%
+                terraform apply -auto-approve plan.tfplan -no-color -input=false
+                if errorlevel 1 exit /b %errorlevel%
+              )
               if /I "%TF_ACTION%"=="APPLY" (
                 terraform plan %TF_ARGS% -out=plan.tfplan -no-color -input=false
                 if errorlevel 1 exit /b %errorlevel%
                 terraform apply -auto-approve plan.tfplan -no-color -input=false
                 if errorlevel 1 exit /b %errorlevel%
-              ) else (
+              )
+              if /I "%TF_ACTION%"=="DESTROY" (
                 terraform plan -destroy %TF_ARGS% -out=destroy.tfplan -no-color -input=false
                 if errorlevel 1 exit /b %errorlevel%
                 terraform apply -auto-approve destroy.tfplan -no-color -input=false
                 if errorlevel 1 exit /b %errorlevel%
+              ) else (
+                echo NO ACTION
               )
 
               terraform output -json
