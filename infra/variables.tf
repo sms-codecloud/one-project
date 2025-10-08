@@ -1,30 +1,46 @@
 variable "region" {
+  description = "AWS region to deploy into"
   type        = string
-  description = "AWS region (e.g., ap-south-1)"
+  default     = "ap-south-1"
 }
 
 variable "instance_type" {
-  type        = string
   description = "EC2 instance type"
+  type        = string
   default     = "t3.small"
 }
 
 variable "key_name" {
+  description = "Existing EC2 key pair name"
   type        = string
-  description = "Optional EC2 key pair (null if empty to rely on SSM only)"
+}
+
+variable "subnet_id" {
+  description = "Optional specific subnet to use (must belong to the default VPC)"
+  type        = string
   default     = ""
 }
 
 variable "http_cidr" {
+  description = "CIDR allowed for HTTP 80"
   type        = string
-  description = "CIDR allowed to access HTTP (80)"
   default     = "0.0.0.0/0"
 }
 
 variable "rdp_cidr" {
+  description = "CIDR allowed for RDP 3389"
   type        = string
-  description = "CIDR allowed to access RDP (3389)"
   default     = "0.0.0.0/0"
+}
+
+variable "tags" {
+  description = "Common tags to apply"
+  type        = map(string)
+  default     = {
+    Project = "one-project"
+    Stack   = "infra"
+    Owner   = "sms-codecloud"
+  }
 }
 
 # Required app secrets (these are passed via TF_VAR_… from Jenkins)
