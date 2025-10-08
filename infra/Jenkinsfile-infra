@@ -3,7 +3,7 @@ pipeline {
   options { disableConcurrentBuilds(); timestamps(); ansiColor('xterm') }
 
   parameters {
-    choice (name: 'TF_ACTION',       choices: ['PLAN','APPLY','DESTROY'], description: 'Terraform action')
+    choice (name: 'TF_ACTION',       choices: ['APPLY','PLAN','DESTROY'], description: 'Terraform action')
     string (name: 'AWS_REGION',      defaultValue: 'ap-south-1',          description: 'AWS region')
     choice (name: 'INSTANCE_TYPE',   choices: ['t3.small','t3.micro'],    description: 'EC2 instance size')
     string (name: 'KEY_NAME',        defaultValue: 'win-one-project-key-pair', description: 'EC2 key pair (leave empty to rely on SSM)')
@@ -94,7 +94,7 @@ pipeline {
                 terraform plan %TF_ARGS% -out=plan.tfplan -no-color -input=false
                 if errorlevel 1 exit /b %errorlevel%
                 echo ==== TF APPLY ====
-                terraform apply -auto-approve plan.tfplan -no-color -input=false
+                terraform apply -auto-approve -no-color -input=false plan.tfplan
                 if errorlevel 1 exit /b %errorlevel%
                 goto :outputs
               )
@@ -104,7 +104,7 @@ pipeline {
                 terraform plan -destroy %TF_ARGS% -out=destroy.tfplan -no-color -input=false
                 if errorlevel 1 exit /b %errorlevel%
                 echo ==== TF DESTROY (apply) ====
-                terraform apply -auto-approve destroy.tfplan -no-color -input=false
+                terraform apply -auto-approve -no-color -input=false destroy.tfplan
                 if errorlevel 1 exit /b %errorlevel%
                 goto :outputs
               )
