@@ -150,7 +150,7 @@ pipeline {
               ]
 
 
-              def payload = groovy.json.JsonOutput.toJson([parameters:[commands:cmds]])
+              def payload = groovy.json.JsonOutput.toJson([commands: cmds])
               writeFile file: 'params.json', text: payload
 
               def cmdId = bat(returnStdout: true, script: "@echo off && aws ssm send-command --instance-ids ${params.EC2_INSTANCE_ID} --document-name AWS-RunPowerShellScript --parameters file://params.json --region ${params.AWS_REGION} --cli-binary-format raw-in-base64-out --query Command.CommandId --output text").trim()
