@@ -92,13 +92,12 @@ pipeline {
               def apiKey   = params.API_S3_KEY
 
               def cmds = [
-                '$ErrorActionPreference = "Stop"',   // <-- FIXED: single-quoted Groovy string, inner ''Stop''
-
+                // keep $ literal by using single-quoted Groovy string; use "Stop" to avoid escaping
+                '$ErrorActionPreference = "Stop"',
                 'Import-Module WebAdministration',
                 'aws --version | Out-Null',
 
-                // variables (these lines are double-quoted because we want Groovy to inject the params;
-                // note the backslash before $ to keep PowerShell variables, e.g. $region)
+                // values injected by Groovy; escape $ as \$ so it stays a PS var name
                 "\$region='${region}'",
                 "\$bucket='${bucket}'",
                 "\$webKey='${webKey}'",
@@ -107,46 +106,43 @@ pipeline {
                 "\$siteRoot='${siteRoot}'",
                 "\$apiRoot='${apiRoot}'",
                 "\$appPool='${appPool}'",
-                '\$inbox=''C:\\\\deploy\\\\incoming''',
-                '\$wzip=Join-Path $inbox ''web.zip''',
-                '\$azip=Join-Path $inbox ''api.zip''',
-                '\$wtmp=Join-Path $inbox ''web_unzip''',
-                '\$atmp=Join-Path $inbox ''api_unzip''',
 
-                // ensure dirs & download
+                // use double quotes inside single-quoted Groovy strings; backslashes must be doubled
+                '$inbox = "C:\\\\deploy\\\\incoming"',
+                '$wzip = Join-Path $inbox "web.zip"',
+                '$azip = Join-Path $inbox "api.zip"',
+                '$wtmp = Join-Path $inbox "web_unzip"',
+                '$atmp = Join-Path $inbox "api_unzip"',
+
                 'New-Item -ItemType Directory -Force -Path $inbox | Out-Null',
                 'New-Item -ItemType Directory -Force -Path $siteRoot | Out-Null',
                 'New-Item -ItemType Directory -Force -Path $apiRoot  | Out-Null',
                 'if (Test-Path $wzip) { Remove-Item $wzip -Force }',
                 'if (Test-Path $azip) { Remove-Item $azip -Force }',
+
                 'aws s3 cp "s3://$bucket/$webKey" $wzip --region $region',
                 'aws s3 cp "s3://$bucket/$apiKey" $azip --region $region',
 
-                // unzip
                 'Add-Type -AssemblyName System.IO.Compression.FileSystem',
                 'if (Test-Path $wtmp) { Remove-Item $wtmp -Recurse -Force }',
                 'if (Test-Path $atmp) { Remove-Item $atmp -Recurse -Force }',
                 '[System.IO.Compression.ZipFile]::ExtractToDirectory($wzip,$wtmp)',
                 '[System.IO.Compression.ZipFile]::ExtractToDirectory($azip,$atmp)',
 
-                // stop site
                 'if (Get-Website -Name $site -ErrorAction SilentlyContinue) { Stop-WebSite -Name $site -ErrorAction SilentlyContinue }',
 
-                // deploy web
                 'if (Test-Path $siteRoot) { Get-ChildItem -Path $siteRoot -Force | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue }',
                 'Copy-Item "$wtmp\\*" $siteRoot -Recurse -Force',
 
-                // deploy api
                 'if (Test-Path $apiRoot) { Get-ChildItem -Path $apiRoot -Force | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue }',
                 'Copy-Item "$atmp\\*" $apiRoot -Recurse -Force',
 
-                // app pool & site
-                'if (!(Test-Path IIS:\\\\AppPools\\\\$appPool)) { New-Item IIS:\\\\AppPools\\\\$appPool | Out-Null; Set-ItemProperty IIS:\\\\AppPools\\\\$appPool -Name managedRuntimeVersion -Value '''' } else { Set-ItemProperty IIS:\\\\AppPools\\\\$appPool -Name managedRuntimeVersion -Value '''' }',
+                // IIS provider paths need double backslashes inside Groovy single quotes
+                'if (!(Test-Path IIS:\\\\AppPools\\\\$appPool)) { New-Item IIS:\\\\AppPools\\\\$appPool | Out-Null; Set-ItemProperty IIS:\\\\AppPools\\\\$appPool -Name managedRuntimeVersion -Value "" } else { Set-ItemProperty IIS:\\\\AppPools\\\\$appPool -Name managedRuntimeVersion -Value "" }',
                 'if (!(Get-Website -Name $site -ErrorAction SilentlyContinue)) { New-Website -Name $site -PhysicalPath $siteRoot -Port 80 -Force | Out-Null } else { Set-ItemProperty IIS:\\\\Sites\\\\$site -Name physicalPath -Value $siteRoot }',
-                '\$apiApp = "IIS:\\\\Sites\\\\$site\\\\api"',
-                'if (!(Test-Path $apiApp)) { New-WebApplication -Site $site -Name ''api'' -PhysicalPath $apiRoot -ApplicationPool $appPool | Out-Null } else { Set-ItemProperty $apiApp -Name physicalPath -Value $apiRoot; Set-ItemProperty $apiApp -Name applicationPool -Value $appPool }',
+                '$apiApp = "IIS:\\\\Sites\\\\$site\\\\api"',
+                'if (!(Test-Path $apiApp)) { New-WebApplication -Site $site -Name "api" -PhysicalPath $apiRoot -ApplicationPool $appPool | Out-Null } else { Set-ItemProperty $apiApp -Name physicalPath -Value $apiRoot; Set-ItemProperty $apiApp -Name applicationPool -Value $appPool }',
 
-                // permissions & start
                 'icacls $siteRoot /grant "IIS_IUSRS:(OI)(CI)RX" /T | Out-Null',
                 'icacls $apiRoot  /grant "IIS_IUSRS:(OI)(CI)RX" /T | Out-Null',
                 'Start-WebSite -Name $site',
