@@ -73,7 +73,3 @@ variable "subnet_id" {
   description = "Existing Subnet to deploy into (leave empty to create new)"
   default     = ""
 }
-
-# required secrets (taken from Jenkins credentials)
-variable "mysql_root_password" { type = string }
-variable "mysql_app_password"  { type = string }
