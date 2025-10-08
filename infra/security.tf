@@ -20,6 +20,14 @@ resource "aws_security_group" "one_project" {
     cidr_blocks = [var.rdp_cidr]
   }
 
+  ingress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+
   egress {
     description = "All egress"
     from_port   = 0

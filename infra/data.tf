@@ -1,15 +1,16 @@
-# Reuse existing IGW if attached to the default VPC; otherwise create one.
-data "aws_internet_gateway" "by_vpc" {
-  filter {
-    name   = "attachment.vpc-id"
-    values = [data.aws_vpc.default.id]
-  }
-}
+# # Reuse existing IGW if attached to the default VPC; otherwise create one.
+# data "aws_internet_gateway" "by_vpc" {
+#   filter {
+#     name   = "attachment.vpc-id"
+#     values = [data.aws_vpc.default.id]
+#   }
+# }
 
 # Default VPC and its subnets
 data "aws_vpc" "default" {
   default = true
 }
+
 
 data "aws_subnets" "default_vpc_subnets" {
   filter {

@@ -23,7 +23,7 @@ output "security_group_id" {
   description = "Security group id"
 }
 
-output "route_table_id" {
-  value       = aws_route_table.public.id
-  description = "Public route table id"
-}
+# output "route_table_id" {
+#   value       = aws_route_table.public.id
+#   description = "Public route table id"
+# }
