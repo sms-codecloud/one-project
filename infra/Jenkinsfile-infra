@@ -91,10 +91,11 @@ pipeline {
 
               if /I "%TF_ACTION%"=="APPLY" (
                 echo ==== TF PLAN (for APPLY) ====
-                terraform plan %TF_ARGS% -out=plan.tfplan -no-color -input=false
+                terraform plan %TF_ARGS% -out=apply.tfplan -no-color -input=false
                 if errorlevel 1 exit /b %errorlevel%
                 echo ==== TF APPLY ====
-                terraform apply -auto-approve -no-color -input=false plan.tfplan
+                terraform apply -auto-approve -no-color -input=false apply.tfplan
+                terraform show -no-color apply.tfplan > apply.txt
                 if errorlevel 1 exit /b %errorlevel%
                 goto :outputs
               )
@@ -105,6 +106,7 @@ pipeline {
                 if errorlevel 1 exit /b %errorlevel%
                 echo ==== TF DESTROY (apply) ====
                 terraform destroy -auto-approve -no-color -input=false destroy.tfplan
+                terraform show -no-color destroy.tfplan > destroy.txt
                 if errorlevel 1 exit /b %errorlevel%
                 goto :outputs
               )
