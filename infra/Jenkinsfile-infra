@@ -9,6 +9,8 @@ pipeline {
     string(name: 'RDP_CIDR',    defaultValue: '0.0.0.0/0', description: 'CIDR allowed to RDP 3389')
     string(name: 'KEY_NAME',    defaultValue: 'win-one-project-key-pair', description: 'EC2 key pair name (optional if only using SSM)')
     string(name: 'AWS_REGION',  defaultValue: 'ap-south-1', description: 'AWS region')
+    string(name: 'VPC_ID',      defaultValue: 'vpc-0eb3bcb56d10aaefe', description: 'Existing VPC ID (leave empty to create new)')
+    string(name: 'SUBNET_ID',   defaultValue: 'subnet-0e55663670ec1908c', description: 'Existing Subnet ID (leave empty to create new)')
   }
 
   environment {

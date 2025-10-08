@@ -65,3 +65,16 @@ resource "aws_instance" "app" {
     OS   = "Windows-Server-2022"
   })
 }
+
+
+resource "aws_vpc" "this" {
+  count      = local.use_existing_net ? 0 : 1
+  cidr_block = "10.0.0.0/16"
+}
+
+resource "aws_subnet" "this" {
+  count                   = local.use_existing_net ? 0 : 1
+  vpc_id                  = local.use_existing_net ? null : aws_vpc.this[0].id
+  cidr_block              = "10.0.1.0/24"
+  map_public_ip_on_launch = true
+}

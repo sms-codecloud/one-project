@@ -14,14 +14,6 @@ variable "instance_type" {
   default = "t3.medium"
 }
 
-variable "subnet_id" {
-  type = string
-}
-
-variable "vpc_id" {
-  type = string
-}
-
 variable "key_name" {
   type      = string
   default   = null
@@ -33,12 +25,6 @@ variable "iam_instance_profile" {
   type      = string
   default   = null
   nullable  = true
-}
-
-# Keep RDP open by default (you can restrict later to your office IPs)
-variable "rdp_cidrs" {
-  type    = list(string)
-  default = ["0.0.0.0/0"]
 }
 
 variable "mysql_root_password" {
@@ -58,3 +44,36 @@ variable "common_tags" {
     ManagedBy = "Terraform"
   }
 }
+
+
+
+
+# declare these since Jenkins passes them
+variable "http_cidr" {
+  type        = string
+  description = "CIDR allowed to HTTP 80"
+  default     = "0.0.0.0/0"
+}
+
+variable "rdp_cidr" {
+  type        = string
+  description = "CIDR allowed to RDP 3389"
+  default     = "0.0.0.0/0"
+}
+
+# if you CREATE the VPC/Subnet inside this root, make these optional
+variable "vpc_id" {
+  type        = string
+  description = "Existing VPC to deploy into (leave empty to create new)"
+  default     = ""
+}
+
+variable "subnet_id" {
+  type        = string
+  description = "Existing Subnet to deploy into (leave empty to create new)"
+  default     = ""
+}
+
+# required secrets (taken from Jenkins credentials)
+variable "mysql_root_password" { type = string }
+variable "mysql_app_password"  { type = string }
