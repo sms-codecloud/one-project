@@ -1,2 +1,5 @@
-region   = "ap-south-1"
-key_name = "one-project-key-pair"
+region = "ap-south-1"
+# instance_type = "t3.small"
+# key_name      = "win-one-project-key-pair"
+# http_cidr     = "0.0.0.0/0"
+# rdp_cidr      = "0.0.0.0/0"

@@ -1,21 +1,23 @@
-# --- Always get the most recent Windows Server 2022 English Full Base AMI ---
-# Uses official Amazon-owned images.
-data "aws_ami" "windows_2022" {
-  most_recent = true
-  owners      = ["amazon"]
+# Default VPC
+data "aws_vpc" "default" {
+  default = true
+}
 
+# All subnets in the default VPC
+data "aws_subnets" "default_vpc_subnets" {
   filter {
-    name   = "name"
-    values = ["Windows_Server-2022-English-Full-Base-*"]
+    name   = "vpc-id"
+    values = [data.aws_vpc.default.id]
   }
+}
 
-  filter {
-    name   = "virtualization-type"
-    values = ["hvm"]
-  }
+# Randomize subnet selection to pick a single default subnet
+resource "random_shuffle" "subnet_picker" {
+  input        = data.aws_subnets.default_vpc_subnets.ids
+  result_count = 1
+}
 
-  filter {
-    name   = "root-device-type"
-    values = ["ebs"]
-  }
+# Latest Windows Server 2022 AMI via SSM Parameter
+data "aws_ssm_parameter" "win2022_ami" {
+  name = "/aws/service/ami-windows-latest/Windows_Server-2022-English-Full-Base"
 }

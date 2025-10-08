@@ -1,34 +1,21 @@
 pipeline {
-  agent { label 'win-dev' } // your Windows 11 Jenkins agent label
+  agent { label 'win-dev' }
   options { disableConcurrentBuilds(); timestamps() }
 
   parameters {
     choice(name: 'TF_ACTION', choices: ['APPLY','DESTROY'], description: 'Terraform action')
-    choice(name: 'INSTANCE_TYPE', choices: ['t3.micro','t2.micro','t3.small'], description: 'EC2 size (t3.micro is cheapest; t3.small is NOT free-tier)')
-    string(name: 'HTTP_CIDR',   defaultValue: '0.0.0.0/0', description: 'CIDR allowed to HTTP 80')
-    string(name: 'RDP_CIDR',    defaultValue: '0.0.0.0/0', description: 'CIDR allowed to RDP 3389')
-    string(name: 'KEY_NAME',    defaultValue: 'win-one-project-key-pair', description: 'EC2 key pair name (optional if only using SSM)')
-    string(name: 'AWS_REGION',  defaultValue: 'ap-south-1', description: 'AWS region')
-    string(name: 'VPC_ID',      defaultValue: 'vpc-0eb3bcb56d10aaefe', description: 'Existing VPC ID (leave empty to create new)')
-    string(name: 'SUBNET_ID',   defaultValue: 'subnet-0e55663670ec1908c', description: 'Existing Subnet ID (leave empty to create new)')
+    string(name: 'AWS_REGION',  defaultValue: 'ap-south-1', description: 'Region')
+    choice(name: 'INSTANCE_TYPE', choices: ['t3.small','t3.micro'], description: 'EC2 size')
+    string(name: 'KEY_NAME',    defaultValue: '', description: 'EC2 key pair (leave empty to rely on SSM)')
+    string(name: 'HTTP_CIDR',   defaultValue: '0.0.0.0/0', description: 'CIDR for HTTP 80')
+    string(name: 'RDP_CIDR',    defaultValue: '0.0.0.0/0', description: 'CIDR for RDP 3389')
+
+    // Taken from user at build time (masked)
     password(name: 'MYSQL_ROOT_PASSWORD', defaultValue: '', description: 'MySQL root password')
     password(name: 'MYSQL_APP_PASSWORD',  defaultValue: '', description: 'MySQL app/user password')
   }
 
-  environment {
-    TF_IN_AUTOMATION = 'true'
-    TF_DIR = 'infra'
-  }
-
   stages {
-    stage('Checkout') {
-      steps {
-        deleteDir()
-        checkout scm
-        bat 'dir'
-      }
-    }
-
     stage('Terraform Init/Plan/Apply') {
       steps {
         withCredentials([
@@ -37,7 +24,7 @@ pipeline {
           dir('infra') {
             bat '''
               @echo off
-              rem --- DO NOT ECHO SECRETS ---
+              rem ----- secrets via TF_VAR_* so they aren’t echoed in plan -----
               set TF_VAR_mysql_root_password=%MYSQL_ROOT_PASSWORD%
               set TF_VAR_mysql_app_password=%MYSQL_APP_PASSWORD%
               @echo on
@@ -46,39 +33,33 @@ pipeline {
               set "PATH=C:\\binaries\\terraform;!PATH!"
 
               terraform --version
+
               terraform init -reconfigure -upgrade -no-color
 
-              rem Build non-secret args only
+              rem Non-secret args only
               set "TF_ARGS=-var=region=%AWS_REGION% -var=instance_type=%INSTANCE_TYPE% -var=key_name=%KEY_NAME% -var=http_cidr=%HTTP_CIDR% -var=rdp_cidr=%RDP_CIDR%"
 
-              if not "%VPC_ID%"==""    set "TF_ARGS=%TF_ARGS% -var=vpc_id=%VPC_ID%"
-              if not "%SUBNET_ID%"=="" set "TF_ARGS=%TF_ARGS% -var=subnet_id=%SUBNET_ID%"
-
               if /I "%TF_ACTION%"=="APPLY" (
-                terraform plan %TF_ARGS% -out=plan.tfplan -no-color -input=false
+                terraform plan !TF_ARGS! -out=plan.tfplan -no-color -input=false
                 if errorlevel 1 exit /b !errorlevel!
                 terraform apply -auto-approve plan.tfplan -no-color -input=false
                 if errorlevel 1 exit /b !errorlevel!
               ) else (
-                terraform plan -destroy %TF_ARGS% -out=destroy.tfplan -no-color -input=false
+                terraform plan -destroy !TF_ARGS! -out=destroy.tfplan -no-color -input=false
                 if errorlevel 1 exit /b !errorlevel!
                 terraform apply -auto-approve destroy.tfplan -no-color -input=false
                 if errorlevel 1 exit /b !errorlevel!
               )
 
-              terraform output -json
-            '''
+              withEnv:
+              rem Show outputs (no secrets printed)
+              '''
           }
-        }
-      }
-    }
-
-
-    stage('Outputs') {
-      steps {
-        dir('infra') {
-          withEnv(['PATH+TERRAFORM=C:\\binaries\\terraform']) {
-            bat 'terraform output -json'
+          // run output separately to ensure clean PATH context
+          dir('infra') {
+            withEnv(['PATH+TERRAFORM=C:\\binaries\\terraform']) {
+              bat 'terraform output -json'
+            }
           }
         }
       }
@@ -87,8 +68,7 @@ pipeline {
 
   post {
     always {
-      // Do NOT wrap in dir(); keep path relative to workspace to retain FilePath context
-      archiveArtifacts artifacts: 'infra/plan.tfplan', fingerprint: true, allowEmptyArchive: true
+      archiveArtifacts artifacts: 'infra/*.tfplan', fingerprint: true, allowEmptyArchive: true
     }
   }
 }

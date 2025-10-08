@@ -1,11 +1,27 @@
-output "ec2_public_ip" { 
-    value = aws_instance.app.public_ip 
-    description = "Public IP of the EC2 instance"
+output "vpc_id" {
+  value = data.aws_vpc.default.id
 }
 
-output "app_url"       { 
-    value = "http://${aws_instance.app.public_dns}" 
-    description = "URL of the application"
+output "subnet_id" {
+  value = local.selected_subnet_id
 }
 
-output "ec2_public_dns" { value = aws_instance.app.public_dns }
+output "security_group_id" {
+  value = aws_security_group.app.id
+}
+
+output "instance_id" {
+  value = aws_instance.app.id
+}
+
+output "instance_public_ip" {
+  value = aws_instance.app.public_ip
+}
+
+output "instance_public_dns" {
+  value = aws_instance.app.public_dns
+}
+
+output "windows_ami_id" {
+  value = data.aws_ssm_parameter.win2022_ami.value
+}

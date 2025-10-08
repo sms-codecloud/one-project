@@ -1,75 +1,41 @@
-# --- Variables ---
 variable "region" {
-  type    = string
-  default = "ap-south-1"
-}
-
-variable "project" {
-  type    = string
-  default = "one-project"
+  type        = string
+  description = "AWS region (e.g., ap-south-1)"
 }
 
 variable "instance_type" {
-  type    = string
-  default = "t3.medium"
+  type        = string
+  description = "EC2 instance type"
+  default     = "t3.small"
 }
 
 variable "key_name" {
-  type      = string
-  default   = null
-  nullable  = true
-  sensitive = false
+  type        = string
+  description = "Optional EC2 key pair (null if empty to rely on SSM only)"
+  default     = ""
 }
 
-variable "iam_instance_profile" {
-  type      = string
-  default   = null
-  nullable  = true
-}
-
-variable "mysql_root_password" {
-  type      = string
-  sensitive = true
-}
-
-variable "mysql_app_password" {
-  type      = string
-  sensitive = true
-}
-
-variable "common_tags" {
-  type = map(string)
-  default = {
-    Project   = "one-project"
-    ManagedBy = "Terraform"
-  }
-}
-
-
-
-
-# declare these since Jenkins passes them
 variable "http_cidr" {
   type        = string
-  description = "CIDR allowed to HTTP 80"
+  description = "CIDR allowed to access HTTP (80)"
   default     = "0.0.0.0/0"
 }
 
 variable "rdp_cidr" {
   type        = string
-  description = "CIDR allowed to RDP 3389"
+  description = "CIDR allowed to access RDP (3389)"
   default     = "0.0.0.0/0"
 }
 
-# if you CREATE the VPC/Subnet inside this root, make these optional
-variable "vpc_id" {
+# Required app secrets (these are passed via TF_VAR_… from Jenkins)
+variable "mysql_root_password" {
   type        = string
-  description = "Existing VPC to deploy into (leave empty to create new)"
-  default     = ""
+  description = "MySQL root password"
+  sensitive   = true
 }
 
-variable "subnet_id" {
+variable "mysql_app_password" {
   type        = string
-  description = "Existing Subnet to deploy into (leave empty to create new)"
-  default     = ""
+  description = "MySQL app/user password"
+  sensitive   = true
 }
