@@ -1,11 +1,6 @@
 locals {
-  selected_subnet_id = random_shuffle.subnet_picker.result[0]
+  chosen_subnet_id = var.subnet_id != "" ? var.subnet_id : data.aws_subnets.default_vpc_subnets.ids[0]
 
-  # Pick the main route table from the set (Associations[*].Main contains true for the main one)
-  main_rtb_id = one(flatten([
-    for rt in data.aws_route_tables.main_for_default_vpc.ids : [
-      rt
-    ]
-  ]))
+  igw_id = length(data.aws_internet_gateway.by_vpc.internet_gateway_id) > 0 ? data.aws_internet_gateway.by_vpc.internet_gateway_id : aws_internet_gateway.this[0].id
 
 }

@@ -16,7 +16,7 @@ resource "aws_instance" "win" {
   associate_public_ip_address = true
 
   # Minimal bootstrap (optional). Keep short to avoid long waits.
- user_data = templatefile("${path.module}/data/user_data_windows.ps1", {
+  user_data = templatefile("${path.module}/data/user_data_windows.ps1", {
     MYSQL_ROOT_PASSWORD = var.mysql_root_password
     MYSQL_APP_PASSWORD  = var.mysql_app_password
   })

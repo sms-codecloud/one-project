@@ -36,7 +36,7 @@ variable "rdp_cidr" {
 variable "tags" {
   description = "Common tags to apply"
   type        = map(string)
-  default     = {
+  default = {
     Project = "one-project"
     Stack   = "infra"
     Owner   = "sms-codecloud"

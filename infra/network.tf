@@ -1,21 +1,7 @@
-# Reuse existing IGW if attached to the default VPC; otherwise create one.
-data "aws_internet_gateways" "by_vpc" {
-  filter {
-    name   = "attachment.vpc-id"
-    values = [data.aws_vpc.default.id]
-  }
-}
-
 resource "aws_internet_gateway" "this" {
-  count  = length(data.aws_internet_gateways.by_vpc.ids) == 0 ? 1 : 0
+  count  = length(data.aws_internet_gateway.by_vpc.internet_gateway_id) == 0 ? 1 : 0
   vpc_id = data.aws_vpc.default.id
   tags   = merge(var.tags, { Name = "one-project-igw" })
-}
-
-locals {
-  igw_id = length(data.aws_internet_gateways.by_vpc.ids) > 0
-    ? data.aws_internet_gateways.by_vpc.ids[0]
-    : aws_internet_gateway.this[0].id
 }
 
 # Create a dedicated public route table with default route to the IGW
