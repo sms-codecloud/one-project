@@ -60,7 +60,7 @@ resource "aws_iam_instance_profile" "ec2_profile" {
 
 # Windows EC2 instance in a random default subnet
 resource "aws_instance" "app" {
-  ami           = data.aws_ssm_parameter.win2022_ami.value
+  ami           = data.aws_ami.windows_2022.id
   instance_type = var.instance_type
   subnet_id     = local.selected_subnet_id
   key_name      = var.key_name != "" ? var.key_name : null

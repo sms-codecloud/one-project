@@ -21,3 +21,19 @@ resource "random_shuffle" "subnet_picker" {
 data "aws_ssm_parameter" "win2022_ami" {
   name = "/aws/service/ami-windows-latest/Windows_Server-2022-English-Full-Base"
 }
+
+# Lookup latest public Windows Server 2022 AMI from Amazon (non-sensitive)
+data "aws_ami" "windows_2022" {
+  most_recent = true
+  owners      = ["amazon"]
+
+  filter {
+    name   = "name"
+    values = ["Windows_Server-2022-English-Full-Base-*"]
+  }
+
+  filter {
+    name   = "state"
+    values = ["available"]
+  }
+}
