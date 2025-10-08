@@ -92,7 +92,7 @@ pipeline {
               def apiKey   = params.API_S3_KEY
 
               def cmds = [
-                '$ErrorActionPreference = ''Stop''',   // <-- FIXED: single-quoted Groovy string, inner ''Stop''
+                '$ErrorActionPreference = "Stop"',   // <-- FIXED: single-quoted Groovy string, inner ''Stop''
 
                 'Import-Module WebAdministration',
                 'aws --version | Out-Null',
