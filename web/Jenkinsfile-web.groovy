@@ -134,7 +134,7 @@ pipeline {
 
                 // deploy web
                 'if (Test-Path $siteRoot) { Get-ChildItem -Path $siteRoot -Force | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue }',
-                'Copy-Item "$wtmp\*" $siteRoot -Recurse -Force',
+                'Copy-Item "$wtmp\\*" $siteRoot -Recurse -Force',
 
                 // deploy api
                 'if (Test-Path $apiRoot) { Get-ChildItem -Path $apiRoot -Force | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue }',
