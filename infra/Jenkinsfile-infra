@@ -11,6 +11,8 @@ pipeline {
     string(name: 'AWS_REGION',  defaultValue: 'ap-south-1', description: 'AWS region')
     string(name: 'VPC_ID',      defaultValue: 'vpc-0eb3bcb56d10aaefe', description: 'Existing VPC ID (leave empty to create new)')
     string(name: 'SUBNET_ID',   defaultValue: 'subnet-0e55663670ec1908c', description: 'Existing Subnet ID (leave empty to create new)')
+    password(name: 'MYSQL_ROOT_PASSWORD', defaultValue: '', description: 'MySQL root password')
+    password(name: 'MYSQL_APP_PASSWORD',  defaultValue: '', description: 'MySQL app/user password')
   }
 
   environment {
@@ -27,76 +29,50 @@ pipeline {
       }
     }
 
-    stage('Terraform Init') {
+    stage('Terraform Init/Plan/Apply') {
       steps {
-        withCredentials([[$class:'AmazonWebServicesCredentialsBinding', credentialsId:'aws_secrets_shankar']]) {
+        withCredentials([
+          [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws_secrets_shankar']
+        ]) {
           dir('infra') {
-            withEnv([
-              'PATH+TERRAFORM=C:\\binaries\\terraform',
-              'PATH+AWS=C:\\Program Files\\Amazon\\AWSCLIV2'
-            ]) {
-              bat 'terraform -version'
-              bat 'terraform init -reconfigure -input=false -no-color'
-            }
+            bat '''
+              @echo off
+              rem --- DO NOT ECHO SECRETS ---
+              set TF_VAR_mysql_root_password=%MYSQL_ROOT_PASSWORD%
+              set TF_VAR_mysql_app_password=%MYSQL_APP_PASSWORD%
+              @echo on
+
+              setlocal EnableExtensions EnableDelayedExpansion
+              set "PATH=C:\\binaries\\terraform;!PATH!"
+
+              terraform --version
+              terraform init -reconfigure -upgrade -no-color
+
+              rem Build non-secret args only
+              set "TF_ARGS=-var=region=%AWS_REGION% -var=instance_type=%INSTANCE_TYPE% -var=key_name=%KEY_NAME% -var=http_cidr=%HTTP_CIDR% -var=rdp_cidr=%RDP_CIDR%"
+
+              if not "%VPC_ID%"==""    set "TF_ARGS=%TF_ARGS% -var=vpc_id=%VPC_ID%"
+              if not "%SUBNET_ID%"=="" set "TF_ARGS=%TF_ARGS% -var=subnet_id=%SUBNET_ID%"
+
+              if /I "%TF_ACTION%"=="APPLY" (
+                terraform plan %TF_ARGS% -out=plan.tfplan -no-color -input=false
+                if errorlevel 1 exit /b !errorlevel!
+                terraform apply -auto-approve plan.tfplan -no-color -input=false
+                if errorlevel 1 exit /b !errorlevel!
+              ) else (
+                terraform plan -destroy %TF_ARGS% -out=destroy.tfplan -no-color -input=false
+                if errorlevel 1 exit /b !errorlevel!
+                terraform apply -auto-approve destroy.tfplan -no-color -input=false
+                if errorlevel 1 exit /b !errorlevel!
+              )
+
+              terraform output -json
+            '''
           }
         }
       }
     }
 
-    stage('Terraform Plan') {
-      steps {
-        withCredentials([[$class:'AmazonWebServicesCredentialsBinding', credentialsId:'aws_secrets_shankar']]) {
-          dir('infra') {
-            withEnv([
-              'PATH+TERRAFORM=C:\\binaries\\terraform',
-              'PATH+AWS=C:\\Program Files\\Amazon\\AWSCLIV2'
-            ]) {
-              bat """
-                terraform plan ^
-                  -var="region=%AWS_REGION%" ^
-                  -var="instance_type=%INSTANCE_TYPE%" ^
-                  -var="key_name=%KEY_NAME%" ^
-                  -var="http_cidr=%HTTP_CIDR%" ^
-                  -var="rdp_cidr=%RDP_CIDR%" ^
-                  -out=plan.tfplan -no-color -input=false
-              """
-              // print a human-readable plan as well
-              bat 'terraform show -no-color plan.tfplan'
-            }
-          }
-        }
-      }
-    }
-
-    stage('Terraform Apply / Destroy') {
-      when { anyOf { expression { params.TF_ACTION == 'APPLY' }; expression { params.TF_ACTION == 'DESTROY' } } }
-      steps {
-        withCredentials([[$class:'AmazonWebServicesCredentialsBinding', credentialsId:'aws_secrets_shankar']]) {
-          dir('infra') {
-            withEnv([
-              'PATH+TERRAFORM=C:\\binaries\\terraform',
-              'PATH+AWS=C:\\Program Files\\Amazon\\AWSCLIV2'
-            ]) {
-              script {
-                if (params.TF_ACTION == 'APPLY') {
-                  bat 'terraform apply -auto-approve plan.tfplan -no-color'
-                } else {
-                  bat """
-                    terraform destroy ^
-                      -var="region=%AWS_REGION%" ^
-                      -var="instance_type=%INSTANCE_TYPE%" ^
-                      -var="key_name=%KEY_NAME%" ^
-                      -var="http_cidr=%HTTP_CIDR%" ^
-                      -var="rdp_cidr=%RDP_CIDR%" ^
-                      -auto-approve -no-color -input=false
-                  """
-                }
-              }
-            }
-          }
-        }
-      }
-    }
 
     stage('Outputs') {
       steps {
