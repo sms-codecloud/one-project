@@ -25,7 +25,6 @@ resource "aws_security_group" "app" {
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
-    ipv6_cidr_blocks = ["::/0"]
     description = "All egress"
   }
 
@@ -78,4 +77,10 @@ resource "aws_instance" "app" {
   tags = {
     Name = "one-project-windows"
   }
+}
+
+resource "aws_route" "main_to_igw" {
+  route_table_id         = data.aws_route_table.main.id
+  destination_cidr_block = "0.0.0.0/0"
+  gateway_id             = aws_internet_gateway.default_vpc_igw.id
 }

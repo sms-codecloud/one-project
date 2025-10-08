@@ -11,6 +11,31 @@ data "aws_subnets" "default_vpc_subnets" {
   }
 }
 
+# Create an Internet Gateway if the default VPC doesn't have one
+resource "aws_internet_gateway" "default_vpc_igw" {
+  vpc_id = data.aws_vpc.default.id
+}
+
+# Get the MAIN route table of the default VPC
+data "aws_route_tables" "main_for_default_vpc" {
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.default.id]
+  }
+}
+
+# Safer: explicitly fetch the main route table
+data "aws_route_table" "main" {
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.default.id]
+  }
+  filter {
+    name   = "association.main"
+    values = ["true"]
+  }
+}
+
 # Randomize subnet selection to pick a single default subnet
 resource "random_shuffle" "subnet_picker" {
   input        = data.aws_subnets.default_vpc_subnets.ids
@@ -37,3 +62,5 @@ data "aws_ami" "windows_2022" {
     values = ["available"]
   }
 }
+
+
