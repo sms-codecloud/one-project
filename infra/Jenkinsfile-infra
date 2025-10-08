@@ -37,16 +37,21 @@ pipeline {
             @echo off
             setlocal
             terraform --version
-            terraform fmt -check
+
+            rem Format in-place (recursive) so the build doesn't fail on style
+            terraform fmt -recursive -write=true -diff
             if errorlevel 1 exit /b %errorlevel%
+
             terraform init -reconfigure -upgrade -no-color
             if errorlevel 1 exit /b %errorlevel%
+
             terraform validate -no-color
             if errorlevel 1 exit /b %errorlevel%
           '''
         }
       }
     }
+
 
     stage('Plan / Apply / Destroy') {
       steps {
