@@ -58,6 +58,9 @@ pipeline {
           dir('infra') {
             bat '''
               @echo off
+              rem ==========================================================
+              rem  Robust action dispatcher for TF_ACTION on Windows batch
+              rem ==========================================================
               setlocal DisableDelayedExpansion
 
               rem ---- Secrets via TF_VAR_* (never echo) ----
@@ -69,58 +72,73 @@ pipeline {
               rem ---- Non-secret args ----
               set "TF_ARGS=-var=region=%AWS_REGION% -var=instance_type=%INSTANCE_TYPE% -var=http_cidr=%HTTP_CIDR% -var=rdp_cidr=%RDP_CIDR%"
               if not "%KEY_NAME%"=="" set "TF_ARGS=%TF_ARGS% -var=key_name=%KEY_NAME%"
-              echo Terraform args: %TF_ARGS%
 
-              rem Ensure init (idempotent)
+              rem ---- Normalize action (strip quotes, upcase) ----
+              set "ACTION=%TF_ACTION%"
+              set "ACTION=%ACTION:"=%"
+              for %%A in (APPLY PLAN DESTROY) do (
+                if /I "%%A"=="%ACTION%" set "ACTION=%%A"
+              )
+
+              echo.
+              echo ===== Selected TF_ACTION: [%ACTION%] =====
+              echo Terraform args: %TF_ARGS%
+              echo.
+
+              rem ---- Always init before any command ----
               terraform init -reconfigure -upgrade -no-color
               if errorlevel 1 exit /b %errorlevel%
 
-              if /I "%TF_ACTION%"=="PLAN" (
-                echo ==== TF PLAN ====
-                terraform plan %TF_ARGS% -out=plan.tfplan -no-color -input=false
-                if errorlevel 1 exit /b %errorlevel%
-                terraform show -no-color plan.tfplan > plan.txt
-                goto :done
-              )
-
-              if /I "%TF_ACTION%"=="APPLY" (
-                echo ==== TF PLAN (for APPLY) ====
-                terraform plan %TF_ARGS% -out=apply.tfplan -no-color -input=false
-                if errorlevel 1 exit /b %errorlevel%
-                echo ==== TF APPLY ====
-                terraform apply -auto-approve -no-color -input=false apply.tfplan
-                if errorlevel 1 exit /b %errorlevel%
-                terraform show -no-color apply.tfplan > apply.txt
-                goto :outputs
-              )
-
-              if /I "%TF_ACTION%"=="DESTROY" (
-                echo ==== TF PLAN (DESTROY) ====
-                terraform plan -destroy %TF_ARGS% -out=destroy.tfplan -no-color -input=false
-                if errorlevel 1 exit /b %errorlevel%
-                echo ==== TF APPLY (DESTROY PLAN) ====
-                terraform apply -auto-approve -no-color -input=false destroy.tfplan
-                if errorlevel 1 exit /b %errorlevel%
-                terraform show -no-color destroy.tfplan > destroy.txt
-                goto :outputs
-              )
+              if /I "%ACTION%"=="PLAN"    goto :do_plan
+              if /I "%ACTION%"=="APPLY"   goto :do_apply
+              if /I "%ACTION%"=="DESTROY" goto :do_destroy
 
               echo ERROR: Unknown TF_ACTION "%TF_ACTION%"
               exit /b 2
 
+              :do_plan
+              echo ==== TF PLAN ====
+              terraform plan %TF_ARGS% -out=plan.tfplan -no-color -input=false
+              if errorlevel 1 exit /b %errorlevel%
+              terraform show -no-color plan.tfplan > plan.txt
+              goto :outputs
+
+              :do_apply
+              echo ==== TF PLAN (for APPLY) ====
+              terraform plan %TF_ARGS% -out=apply.tfplan -no-color -input=false
+              if errorlevel 1 exit /b %errorlevel%
+              echo ==== TF APPLY ====
+              terraform apply -auto-approve -no-color -input=false apply.tfplan
+              if errorlevel 1 exit /b %errorlevel%
+              terraform show -no-color apply.tfplan > apply.txt
+              goto :outputs
+
+              :do_destroy
+              rem You can either do a plan+apply of the destroy plan, or direct destroy.
+              rem Option A: plan + apply (keeps artifacts)
+              echo ==== TF PLAN (DESTROY) ====
+              terraform plan -destroy %TF_ARGS% -out=destroy.tfplan -no-color -input=false
+              if errorlevel 1 exit /b %errorlevel%
+              echo ==== TF APPLY (DESTROY PLAN) ====
+              terraform apply -auto-approve -no-color -input=false destroy.tfplan
+              if errorlevel 1 exit /b %errorlevel%
+              terraform show -no-color destroy.tfplan > destroy.txt
+              goto :outputs
+
               :outputs
-              rem Safe outputs
+              echo ==== TF OUTPUTS (json) ====
+              rem Safe to print; avoids sensitive values
               terraform output -json > tf-outputs.json
               if errorlevel 1 exit /b %errorlevel%
               type tf-outputs.json
 
-              :done
               exit /b 0
             '''
           }
         }
       }
     }
+
 
   }
 
