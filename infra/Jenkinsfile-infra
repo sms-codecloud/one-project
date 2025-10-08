@@ -10,7 +10,7 @@ pipeline {
     string(name: 'HTTP_CIDR',   defaultValue: '0.0.0.0/0', description: 'CIDR for HTTP 80')
     string(name: 'RDP_CIDR',    defaultValue: '0.0.0.0/0', description: 'CIDR for RDP 3389')
 
-    // Taken from user at build time (masked)
+    // prompt user each run (masked)
     password(name: 'MYSQL_ROOT_PASSWORD', defaultValue: '', description: 'MySQL root password')
     password(name: 'MYSQL_APP_PASSWORD',  defaultValue: '', description: 'MySQL app/user password')
   }
@@ -24,42 +24,41 @@ pipeline {
           dir('infra') {
             bat '''
               @echo off
-              rem ----- secrets via TF_VAR_* so they aren’t echoed in plan -----
-              set TF_VAR_mysql_root_password=%MYSQL_ROOT_PASSWORD%
-              set TF_VAR_mysql_app_password=%MYSQL_APP_PASSWORD%
-              @echo on
+              rem --- IMPORTANT: keep delayed expansion OFF while setting secrets ---
+              setlocal DisableDelayedExpansion
 
-              setlocal EnableExtensions EnableDelayedExpansion
-              set "PATH=C:\\binaries\\terraform;!PATH!"
+              rem Secrets to Terraform via TF_VAR_* (Terraform auto-loads them as variables)
+              set "TF_VAR_mysql_root_password=%MYSQL_ROOT_PASSWORD%"
+              set "TF_VAR_mysql_app_password=%MYSQL_APP_PASSWORD%"
 
+              rem (Optional sanity checks – do NOT echo values)
+              if defined TF_VAR_mysql_root_password (echo TF_VAR_mysql_root_password set) else (echo MISSING TF_VAR_mysql_root_password & exit /b 1)
+              if defined TF_VAR_mysql_app_password  (echo TF_VAR_mysql_app_password  set) else (echo MISSING TF_VAR_mysql_app_password  & exit /b 1)
+
+              rem Tooling
+              set "PATH=C:\\binaries\\terraform;%PATH%"
               terraform --version
 
-              terraform init -reconfigure -upgrade -no-color
-
-              rem Non-secret args only
+              rem Build NON-secret args only (use %%VAR%%, not !VAR!)
               set "TF_ARGS=-var=region=%AWS_REGION% -var=instance_type=%INSTANCE_TYPE% -var=key_name=%KEY_NAME% -var=http_cidr=%HTTP_CIDR% -var=rdp_cidr=%RDP_CIDR%"
 
+              terraform init -reconfigure -upgrade -no-color
+              if errorlevel 1 exit /b %errorlevel%
+
               if /I "%TF_ACTION%"=="APPLY" (
-                terraform plan !TF_ARGS! -out=plan.tfplan -no-color -input=false
-                if errorlevel 1 exit /b !errorlevel!
+                terraform plan %TF_ARGS% -out=plan.tfplan -no-color -input=false
+                if errorlevel 1 exit /b %errorlevel%
                 terraform apply -auto-approve plan.tfplan -no-color -input=false
-                if errorlevel 1 exit /b !errorlevel!
+                if errorlevel 1 exit /b %errorlevel%
               ) else (
-                terraform plan -destroy !TF_ARGS! -out=destroy.tfplan -no-color -input=false
-                if errorlevel 1 exit /b !errorlevel!
+                terraform plan -destroy %TF_ARGS% -out=destroy.tfplan -no-color -input=false
+                if errorlevel 1 exit /b %errorlevel%
                 terraform apply -auto-approve destroy.tfplan -no-color -input=false
-                if errorlevel 1 exit /b !errorlevel!
+                if errorlevel 1 exit /b %errorlevel%
               )
 
-              withEnv:
-              rem Show outputs (no secrets printed)
-              '''
-          }
-          // run output separately to ensure clean PATH context
-          dir('infra') {
-            withEnv(['PATH+TERRAFORM=C:\\binaries\\terraform']) {
-              bat 'terraform output -json'
-            }
+              terraform output -json
+          '''
           }
         }
       }
