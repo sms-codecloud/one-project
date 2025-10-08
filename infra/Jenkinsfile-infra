@@ -1,73 +1,125 @@
 pipeline {
   agent { label 'win-dev' }
-  options { disableConcurrentBuilds(); timestamps() }
+  options { disableConcurrentBuilds(); timestamps(); ansiColor('xterm') }
 
   parameters {
-    choice(name: 'TF_ACTION', choices: ['APPLY','PLAN','DESTROY'], description: 'Terraform action')
-    string(name: 'AWS_REGION',  defaultValue: 'ap-south-1', description: 'Region')
-    choice(name: 'INSTANCE_TYPE', choices: ['t3.small','t3.micro'], description: 'EC2 size')
-    string(name: 'KEY_NAME',    defaultValue: '', description: 'EC2 key pair (leave empty to rely on SSM)')
-    string(name: 'HTTP_CIDR',   defaultValue: '0.0.0.0/0', description: 'CIDR for HTTP 80')
-    string(name: 'RDP_CIDR',    defaultValue: '0.0.0.0/0', description: 'CIDR for RDP 3389')
+    choice (name: 'TF_ACTION',       choices: ['PLAN','APPLY','DESTROY'], description: 'Terraform action')
+    string (name: 'AWS_REGION',      defaultValue: 'ap-south-1',          description: 'AWS region')
+    choice (name: 'INSTANCE_TYPE',   choices: ['t3.small','t3.micro'],    description: 'EC2 instance size')
+    string (name: 'KEY_NAME',        defaultValue: 'win-one-project-key-pair', description: 'EC2 key pair (leave empty to rely on SSM)')
+    string (name: 'HTTP_CIDR',       defaultValue: '0.0.0.0/0',           description: 'CIDR for HTTP 80')
+    string (name: 'RDP_CIDR',        defaultValue: '0.0.0.0/0',           description: 'CIDR for RDP 3389')
 
-    // prompt user each run (masked)
-    password(name: 'MYSQL_ROOT_PASSWORD', defaultValue: '', description: 'MySQL root password')
-    password(name: 'MYSQL_APP_PASSWORD',  defaultValue: '', description: 'MySQL app/user password')
+    // Prompt every run; Jenkins masks these if printed (we never echo them)
+    password(name: 'MYSQL_ROOT_PASSWORD', defaultValue: '1234567890', description: 'MySQL root password')
+    password(name: 'MYSQL_APP_PASSWORD',  defaultValue: '1234567890', description: 'MySQL app/user password')
+  }
+
+  environment {
+    TF_IN_AUTOMATION = '1'       // keeps TF non-interactive
+    TF_INPUT         = 'false'
+    NO_COLOR         = '1'
+    PATH             = 'C:\\binaries\\terraform;%PATH%' // ensure terraform.exe is found
   }
 
   stages {
-    stage('Terraform apply/Plan/destroy') {
+    stage('Checkout') {
       steps {
-        withCredentials([
-          [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws_secrets_shankar']
-        ]) {
+        // Jenkins already puts workspace under D:\jenkins-workspace\workspace\<job>
+        checkout scm
+      }
+    }
+
+    stage('Terraform Fmt & Validate') {
+      steps {
+        dir('infra') {
+          bat '''
+            @echo off
+            setlocal
+            terraform --version
+            terraform fmt -check
+            if errorlevel 1 exit /b %errorlevel%
+            terraform init -reconfigure -upgrade -no-color
+            if errorlevel 1 exit /b %errorlevel%
+            terraform validate -no-color
+            if errorlevel 1 exit /b %errorlevel%
+          '''
+        }
+      }
+    }
+
+    stage('Plan / Apply / Destroy') {
+      steps {
+        withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws_secrets_shankar']]) {
           dir('infra') {
             bat '''
               @echo off
-              rem --- IMPORTANT: keep delayed expansion OFF while setting secrets ---
+              rem === IMPORTANT ===
+              rem Keep delayed expansion OFF to avoid mangling secrets containing !
               setlocal DisableDelayedExpansion
 
-              rem Secrets to Terraform via TF_VAR_* (Terraform auto-loads them as variables)
+              rem ---- Pass secrets via TF_VAR_* (auto mapped by Terraform) ----
               set "TF_VAR_mysql_root_password=%MYSQL_ROOT_PASSWORD%"
               set "TF_VAR_mysql_app_password=%MYSQL_APP_PASSWORD%"
 
-              rem (Optional sanity checks – do NOT echo values)
-              if defined TF_VAR_mysql_root_password (echo TF_VAR_mysql_root_password set) else (echo MISSING TF_VAR_mysql_root_password & exit /b 1)
-              if defined TF_VAR_mysql_app_password  (echo TF_VAR_mysql_app_password  set) else (echo MISSING TF_VAR_mysql_app_password  & exit /b 1)
+              rem Sanity: do NOT echo secrets. Just make sure they are present.
+              if not defined TF_VAR_mysql_root_password (echo MISSING TF_VAR_mysql_root_password & exit /b 1)
+              if not defined TF_VAR_mysql_app_password  (echo MISSING TF_VAR_mysql_app_password  & exit /b 1)
 
-              rem Tooling
-              set "PATH=C:\\binaries\\terraform;%PATH%"
-              terraform --version
+              rem ---- Build NON-secret args only ----
+              set "TF_ARGS=-var=region=%AWS_REGION% -var=instance_type=%INSTANCE_TYPE% -var=http_cidr=%HTTP_CIDR% -var=rdp_cidr=%RDP_CIDR%"
+              if not "%KEY_NAME%"=="" (
+                set "TF_ARGS=%TF_ARGS% -var=key_name=%KEY_NAME%"
+              )
 
-              rem Build NON-secret args only (use %%VAR%%, not !VAR!)
-              set "TF_ARGS=-var=region=%AWS_REGION% -var=instance_type=%INSTANCE_TYPE% -var=key_name=%KEY_NAME% -var=http_cidr=%HTTP_CIDR% -var=rdp_cidr=%RDP_CIDR%"
+              rem Show non-secret args for traceability (but not the TF_VAR_* ones)
+              echo Terraform args: %TF_ARGS%
 
+              rem Ensure init (idempotent)
               terraform init -reconfigure -upgrade -no-color
               if errorlevel 1 exit /b %errorlevel%
 
               if /I "%TF_ACTION%"=="PLAN" (
+                echo ==== TF PLAN ====
                 terraform plan %TF_ARGS% -out=plan.tfplan -no-color -input=false
                 if errorlevel 1 exit /b %errorlevel%
-                terraform apply -auto-approve plan.tfplan -no-color -input=false
-                if errorlevel 1 exit /b %errorlevel%
-              )
-              if /I "%TF_ACTION%"=="APPLY" (
-                terraform plan %TF_ARGS% -out=plan.tfplan -no-color -input=false
-                if errorlevel 1 exit /b %errorlevel%
-                terraform apply -auto-approve plan.tfplan -no-color -input=false
-                if errorlevel 1 exit /b %errorlevel%
-              )
-              if /I "%TF_ACTION%"=="DESTROY" (
-                terraform plan -destroy %TF_ARGS% -out=destroy.tfplan -no-color -input=false
-                if errorlevel 1 exit /b %errorlevel%
-                terraform apply -auto-approve destroy.tfplan -no-color -input=false
-                if errorlevel 1 exit /b %errorlevel%
-              ) else (
-                echo NO ACTION
+                rem No apply on PLAN. Save human-readable copy too:
+                terraform show -no-color plan.tfplan > plan.txt
+                goto :done
               )
 
-              terraform output -json
-          '''
+              if /I "%TF_ACTION%"=="APPLY" (
+                echo ==== TF PLAN (for APPLY) ====
+                terraform plan %TF_ARGS% -out=plan.tfplan -no-color -input=false
+                if errorlevel 1 exit /b %errorlevel%
+                echo ==== TF APPLY ====
+                terraform apply -auto-approve plan.tfplan -no-color -input=false
+                if errorlevel 1 exit /b %errorlevel%
+                goto :outputs
+              )
+
+              if /I "%TF_ACTION%"=="DESTROY" (
+                echo ==== TF DESTROY (planned) ====
+                terraform plan -destroy %TF_ARGS% -out=destroy.tfplan -no-color -input=false
+                if errorlevel 1 exit /b %errorlevel%
+                echo ==== TF DESTROY (apply) ====
+                terraform apply -auto-approve destroy.tfplan -no-color -input=false
+                if errorlevel 1 exit /b %errorlevel%
+                goto :outputs
+              )
+
+              echo ERROR: Unknown TF_ACTION "%TF_ACTION%"
+              exit /b 2
+
+              :outputs
+              rem Dump outputs in JSON (safe; avoid printing secrets within modules)
+              terraform output -json > tf-outputs.json
+              if errorlevel 1 exit /b %errorlevel%
+              type tf-outputs.json
+
+              :done
+              exit /b 0
+            '''
           }
         }
       }
@@ -76,7 +128,12 @@ pipeline {
 
   post {
     always {
-      archiveArtifacts artifacts: 'infra/*.tfplan', fingerprint: true, allowEmptyArchive: true
+      dir('infra') {
+        archiveArtifacts artifacts: 'plan.tfplan, destroy.tfplan, plan.txt, tf-outputs.json', allowEmptyArchive: true, fingerprint: true
+      }
+    }
+    failure {
+      echo 'Build failed. Check the console for the exact failing Terraform step.'
     }
   }
 }
