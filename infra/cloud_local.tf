@@ -8,7 +8,7 @@ resource "null_resource" "apply_schema" {
 
   # Re-run if schema changes or endpoint changes
   triggers = {
-    schema_sha  = data.local_file.schema.content_sha256
+    schema_sha  = local.schema_b64
     db_endpoint = aws_db_instance.mysql.address
   }
 

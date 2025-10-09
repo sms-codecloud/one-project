@@ -61,7 +61,7 @@ resource "aws_iam_instance_profile" "ec2_profile" {
 
 # (Optional) Attach instance profile to an existing EC2 by id
 # NOTE: You can only have one instance profile attached; skip if you already use one.
-resource "aws_iam_instance_profile_association" "attach_existing" {
-  instance_id          = aws_instance.win.id
-  iam_instance_profile = aws_iam_instance_profile.ec2_profile.name
-}
+# resource "aws_iam_instance_profile_association" "attach_existing" {
+#   instance_id          = aws_instance.win.id
+#   iam_instance_profile = aws_iam_instance_profile.ec2_profile.name
+# }
