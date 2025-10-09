@@ -55,3 +55,29 @@ variable "mysql_app_password" {
   description = "MySQL app/user password"
   sensitive   = true
 }
+
+
+# MYSQL DB variables
+
+variable "db_name" {
+  description = "Database name to create"
+  type        = string
+  default     = "StudentDb"
+}
+
+variable "db_username" {
+  description = "Master username"
+  type        = string
+  default     = "adminuser"
+}
+
+variable "ssm_parameter_path" {
+  description = "Path to store the app connection string"
+  type        = string
+  default     = "/one-project/mysql/connection"
+}
+
+variable "windows_ec2_instance_id" {
+  description = "Existing Windows EC2 instance id (if you want to grant it SSM read access). Leave empty to skip the attachment."
+  type        = string
+}

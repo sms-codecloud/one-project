@@ -14,9 +14,15 @@ resource "aws_instance" "win" {
   subnet_id                   = local.chosen_subnet_id
   vpc_security_group_ids      = [aws_security_group.one_project.id]
   associate_public_ip_address = true
+  iam_instance_profile        = aws_iam_instance_profile.ec2_profile.name
 
   # Minimal bootstrap (optional). Keep short to avoid long waits.
-  user_data = templatefile("${path.module}/data/user_data_windows.ps1", {
+  # user_data = templatefile("${path.module}/data/user_data_windows.ps1", {
+  #   MYSQL_ROOT_PASSWORD = var.mysql_root_password
+  #   MYSQL_APP_PASSWORD  = var.mysql_app_password
+  # })
+
+    user_data = templatefile("${path.module}/data/user_data_minimal.ps1", {
     MYSQL_ROOT_PASSWORD = var.mysql_root_password
     MYSQL_APP_PASSWORD  = var.mysql_app_password
   })

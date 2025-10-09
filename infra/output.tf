@@ -23,7 +23,19 @@ output "security_group_id" {
   description = "Security group id"
 }
 
-# output "route_table_id" {
-#   value       = aws_route_table.public.id
-#   description = "Public route table id"
-# }
+output "mysql_endpoint" {
+  value     = aws_db_instance.mysql.address
+  sensitive = true
+}
+
+output "mysql_db_name" {
+  value     = var.db_name
+}
+
+output "ssm_parameter_path" {
+  value = aws_ssm_parameter.mysql_conn.name
+}
+
+output "ec2_profile_name" {
+  value = aws_iam_instance_profile.ec2_profile.name
+}
