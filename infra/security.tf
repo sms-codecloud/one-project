@@ -39,7 +39,7 @@ resource "aws_security_group" "rds_sg" {
 # If example EC2 is created, allow from that SG
 resource "aws_vpc_security_group_ingress_rule" "rds_from_example_ec2" {
   security_group_id            = aws_security_group.rds_sg.id
-  description                 = "Allow MySQL from example EC2"
+  description                  = "Allow MySQL from example EC2"
   from_port                    = 3306
   to_port                      = 3306
   ip_protocol                  = "tcp"

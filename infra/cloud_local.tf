@@ -14,7 +14,7 @@ resource "null_resource" "apply_schema" {
 
   provisioner "local-exec" {
     interpreter = ["PowerShell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command"]
-    command = <<-POW
+    command     = <<-POW
       $ErrorActionPreference = 'Stop'
 
       # ----------- Inputs from Terraform -----------

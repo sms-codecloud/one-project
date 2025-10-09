@@ -29,7 +29,7 @@ output "mysql_endpoint" {
 }
 
 output "mysql_db_name" {
-  value     = var.db_name
+  value = var.db_name
 }
 
 output "ssm_parameter_path" {
