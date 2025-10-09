@@ -65,13 +65,13 @@ resource "null_resource" "apply_schema" {
 
     # WinRM connection to the Windows EC2
     connection {
-      type        = "winrm"
-      host        = aws_instance.win.public_ip
-      user        = "Administrator"
-      password    = rsadecrypt(aws_instance.win.password_data, file(var.private_key_path))
-      https       = false
-      insecure    = true
-      timeout     = "15m"
+      type     = "winrm"
+      host     = aws_instance.win.public_ip
+      user     = "Administrator"
+      password = rsadecrypt(aws_instance.win.password_data, file(var.private_key_path))
+      https    = false
+      insecure = true
+      timeout  = "15m"
     }
   }
 }
