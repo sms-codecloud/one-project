@@ -1,28 +1,37 @@
-locals {
-  schema_b64 = filebase64("${path.module}/db/schema.sql")
+# Read schema from local repo and track changes
+data "local_file" "schema" {
+  filename = "${path.module}/db/schema.sql"
 }
 
+locals {
+  # Heredocs don't like newlines in base64; remove them
+  schema_b64 = replace(base64encode(data.local_file.schema.content), "/\\r?\\n/", "")
+}
 
 resource "null_resource" "apply_schema" {
   depends_on = [aws_db_instance.mysql]
 
-  # Re-run if schema changes or endpoint changes
   triggers = {
-    schema_sha  = local.schema_b64
+    schema_sha  = data.local_file.schema.content_sha256
     db_endpoint = aws_db_instance.mysql.address
   }
 
   provisioner "local-exec" {
-    interpreter = ["PowerShell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command"]
-    command     = <<-POW
+    # ✅ Use absolute path to Windows PowerShell to avoid PATH issues
+    interpreter = [
+      "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command"
+    ]
+
+    command = <<-POW
       $ErrorActionPreference = 'Stop'
 
       # ----------- Inputs from Terraform -----------
       $Region   = "${var.region}"
       $DbHost   = "${aws_db_instance.mysql.address}"
-      $DbName   = "${var.db_name}"
-      $DbUser   = "${var.db_username}"
-      $AppSSM   = "${var.ssm_mysql_app_param}"
+      $DbName   = "StudentDb"
+      $DbUser   = "adminuser"
+      $AppSSM   = "/one-project/mysql/app"
       $Instance = "${aws_instance.win.id}"
       $SchemaB64 = @'${local.schema_b64}'@
 
@@ -30,14 +39,11 @@ resource "null_resource" "apply_schema" {
       $Ps = @"
       \$ErrorActionPreference = 'Stop'
 
-      # Literal values baked in by Terraform
-      \$Region   = '$Region'
-      \$DbHost   = '$DbHost'
-      \$DbName   = '$DbName'
-      \$DbUser   = '$DbUser'
-      \$SchemaB64 = @'
-$([string]::Copy($SchemaB64))
-'@
+      \$Region    = '$Region'
+      \$DbHost    = '$DbHost'
+      \$DbName    = '$DbName'
+      \$DbUser    = '$DbUser'
+      \$SchemaB64 = @'$SchemaB64'@
 
       # Paths on the EC2 instance
       \$TmpDir     = 'C:\\temp\\schema'
@@ -51,16 +57,14 @@ $([string]::Copy($SchemaB64))
       # Ensure MySQL client exists (Chocolatey expected on your Windows AMI)
       if (-not (Get-Command mysql.exe -ErrorAction SilentlyContinue)) {
         if (-not (Get-Command choco.exe -ErrorAction SilentlyContinue)) {
-          throw 'Chocolatey not found; cannot auto-install MySQL client. Please preinstall MySQL client or add Chocolatey to the AMI.'
+          throw 'Chocolatey not found; cannot auto-install MySQL client. Preinstall it in the AMI or install Chocolatey.'
         }
         choco install mysql --no-progress -y | Out-Null
-
-        # Common install path for client binaries:
         \$clientBin = 'C:\\Program Files\\MySQL\\MySQL Server 8.0\\bin'
         if (Test-Path \$clientBin) { \$env:PATH = "\$clientBin;\$env:PATH" }
       }
 
-      # Decode the embedded schema to a file (no S3 involved)
+      # Decode schema
       [IO.File]::WriteAllBytes(\$SchemaPath, [Convert]::FromBase64String(\$SchemaB64))
       if (-not (Test-Path \$SchemaPath)) { throw "Failed to materialize schema at: \$SchemaPath" }
 
