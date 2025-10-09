@@ -82,7 +82,26 @@ variable "ssm_mysql_root_param" {
   default = "/one-project/mysql/root"
 }
 
-variable "ssm_mysql_app_param" {
-  type    = string
+variable "app_pwd_param_name" {
+  type = string
   default = "/one-project/mysql/app"
+}
+
+
+# Needed to decrypt Administrator password for WinRM connection:
+variable "private_key_path" { 
+  type = string 
+  description = "Path to the private key matching the EC2 key pair"
+  default = "D:/Git-CodeCloud/AWS/win-one-project-key-pair.pem"
+  # e.g. "D:/keys/win-one-project-key-pair.pem"
+}         
+
+variable "db_admin_username" { 
+  type = string  
+  default = "adminuser"
+}
+
+variable "db_name" {
+  type = string
+  default = "StudentDb"
 }

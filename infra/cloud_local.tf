@@ -15,93 +15,63 @@ resource "null_resource" "apply_schema" {
     db_endpoint = aws_db_instance.mysql.address
   }
 
-  provisioner "local-exec" {
-    # ✅ call PowerShell by absolute path (avoids PATH issues)
-    interpreter = [
-      "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
-      "-NoProfile","-NonInteractive","-ExecutionPolicy","Bypass","-Command"
+  provisioner "remote-exec" {
+    inline = [
+      "$ErrorActionPreference = 'Stop'",
+      "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12",
+
+      # Vars from TF
+      "$Region    = '${var.region}'",
+      "$DbHost    = '${aws_db_instance.mysql.address}'",
+      "$DbName    = '${var.db_name}'",
+      "$DbUser    = '${var.db_admin_username}'", # using admin user to initialize schema
+      "$AppParam  = '${var.app_pwd_param_name}'",
+      "$SchemaB64 = '${local.schema_b64}'",
+
+      # Ensure temp dir, materialize schema
+      "New-Item -ItemType Directory -Force -Path 'C:\\temp\\schema' | Out-Null",
+      "$schemaPath = 'C:\\temp\\schema\\schema.sql'",
+      "[IO.File]::WriteAllBytes($schemaPath, [Convert]::FromBase64String($SchemaB64))",
+
+      # Install AWS CLI if missing (for SSM get-parameter)
+      "if (-not (Get-Command aws.exe -ErrorAction SilentlyContinue)) {",
+      "  $msi = 'C:\\temp\\AWSCLIV2.msi'",
+      "  (New-Object Net.WebClient).DownloadFile('https://awscli.amazonaws.com/AWSCLIV2.msi', $msi)",
+      "  Start-Process msiexec.exe -ArgumentList @('/i',$msi,'/qn') -Wait -NoNewWindow",
+      "  $env:Path = 'C:\\Program Files\\Amazon\\AWSCLIV2;' + $env:Path",
+      "}",
+
+      # Ensure MySQL client (via Chocolatey)
+      "if (-not (Get-Command mysql.exe -ErrorAction SilentlyContinue)) {",
+      "  if (-not (Get-Command choco.exe -ErrorAction SilentlyContinue)) {",
+      "    Set-ExecutionPolicy Bypass -Scope Process -Force;",
+      "    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072;",
+      "    Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'));",
+      "  }",
+      "  choco install mysql --no-progress -y | Out-Null",
+      "  $clientBin = 'C:\\Program Files\\MySQL\\MySQL Server 8.0\\bin';",
+      "  if (Test-Path $clientBin) { $env:Path = \"$clientBin;\" + $env:Path }",
+      "}",
+
+      # Get APP password from SSM (requires IAM role)
+      "$appJson = aws ssm get-parameter --name $AppParam --with-decryption --region $Region | ConvertFrom-Json",
+      "$AppPwd  = $appJson.Parameter.Value",
+
+      # Apply schema
+      "Write-Host \"Applying schema to $DbHost / $DbName as $DbUser\"",
+      "cmd.exe /c \"mysql.exe -h $DbHost -P 3306 -u $DbUser -p$AppPwd $DbName < $schemaPath\"",
+      "Write-Host 'Schema applied successfully.'"
     ]
 
-    command = <<-POW
-      $ErrorActionPreference = 'Stop'
-
-      # -------- Inputs from Terraform --------
-      $Region   = "${var.region}"
-      $DbHost   = "${aws_db_instance.mysql.address}"
-      $DbName   = "StudentDb"
-      $DbUser   = "adminuser"
-      $AppSSM   = "/one-project/mysql/app"
-      $Instance = "${aws_instance.win.id}"
-
-      # ✅ simple single-quoted assignment (no here-string!)
-      $SchemaB64 = '${local.schema_b64}'
-
-      # -------- Build the script that runs ON THE EC2 --------
-      $Ps = @"
-      \$ErrorActionPreference = 'Stop'
-
-      \$Region = '$Region'
-      \$DbHost = '$DbHost'
-      \$DbName = '$DbName'
-      \$DbUser = '$DbUser'
-
-      # ✅ inject the value safely (quoted)
-      \$SchemaB64 = '$SchemaB64'
-
-      # Paths on the EC2 instance
-      \$TmpDir     = 'C:\\temp\\schema'
-      \$SchemaPath = Join-Path \$TmpDir 'schema.sql'
-      New-Item -ItemType Directory -Force -Path \$TmpDir | Out-Null
-
-      # Retrieve app password from SSM Parameter Store (SecureString)
-      \$appJson = aws ssm get-parameter --name "$AppSSM" --with-decryption --region \$Region | ConvertFrom-Json
-      \$AppPwd  = \$appJson.Parameter.Value
-
-      # Ensure MySQL client exists
-      if (-not (Get-Command mysql.exe -ErrorAction SilentlyContinue)) {
-        if (-not (Get-Command choco.exe -ErrorAction SilentlyContinue)) {
-          throw 'Chocolatey not found; cannot auto-install MySQL client. Preinstall it in the AMI or install Chocolatey.'
-        }
-        choco install mysql --no-progress -y | Out-Null
-        \$clientBin = 'C:\\Program Files\\MySQL\\MySQL Server 8.0\\bin'
-        if (Test-Path \$clientBin) { \$env:PATH = "\$clientBin;\$env:PATH" }
-      }
-
-      # Decode schema and apply
-      [IO.File]::WriteAllBytes(\$SchemaPath, [Convert]::FromBase64String(\$SchemaB64))
-      if (-not (Test-Path \$SchemaPath)) { throw "Failed to materialize schema at: \$SchemaPath" }
-
-      Write-Host "Applying schema from: \$SchemaPath to \$DbHost / \$DbName as \$DbUser"
-      \$cmd = "mysql.exe -h \$DbHost -P 3306 -u \$DbUser -p\$AppPwd \$DbName < `"\$SchemaPath`""
-      cmd.exe /c \$cmd
-
-      Write-Host 'Schema applied successfully.'
-"@
-
-      # -------- Invoke on the instance via SSM --------
-      $CmdId = (aws ssm send-command `
-        --instance-ids $Instance `
-        --document-name "AWS-RunPowerShellScript" `
-        --parameters commands="$Ps" `
-        --region $Region `
-        --query "Command.CommandId" `
-        --output text)
-
-      # -------- Wait for completion --------
-      do {
-        Start-Sleep -Seconds 4
-        $inv = aws ssm list-command-invocations --command-id $CmdId --details --region $Region | ConvertFrom-Json
-        $state = $inv.CommandInvocations[0].Status
-        Write-Host "SSM status: $state"
-      } while ($state -in @('Pending','InProgress','Delayed'))
-
-      if ($state -ne 'Success') {
-        $detail = ($inv.CommandInvocations[0].CommandPlugins | ConvertTo-Json -Depth 8)
-        Write-Host $detail
-        throw "Schema apply failed with status: $state"
-      }
-
-      Write-Host "Schema apply finished successfully."
-    POW
+    # WinRM connection to the Windows EC2
+    connection {
+      type        = "winrm"
+      host        = aws_instance.win.public_ip
+      user        = "Administrator"
+      password    = rsadecrypt(aws_instance.win.password_data, file(var.private_key_path))
+      https       = false
+      insecure    = true
+      timeout     = "15m"
+    }
   }
 }
