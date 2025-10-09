@@ -22,7 +22,7 @@ resource "aws_instance" "win" {
   #   MYSQL_APP_PASSWORD  = var.mysql_app_password
   # })
 
-    user_data = templatefile("${path.module}/data/user_data_minimal.ps1", {
+    user_data = templatefile("${path.module}/data/new_user_data_rewrote.ps1", {
     MYSQL_ROOT_PASSWORD = var.mysql_root_password
     MYSQL_APP_PASSWORD  = var.mysql_app_password
   })

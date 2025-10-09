@@ -77,7 +77,12 @@ variable "ssm_parameter_path" {
   default     = "/one-project/mysql/connection"
 }
 
-variable "windows_ec2_instance_id" {
-  description = "Existing Windows EC2 instance id (if you want to grant it SSM read access). Leave empty to skip the attachment."
-  type        = string
+variable "ssm_mysql_root_param" { 
+  type = string 
+  default = "/one-project/mysql/root" 
+}
+
+variable "ssm_mysql_app_param"  { 
+  type = string 
+  default = "/one-project/mysql/app"  
 }
