@@ -68,7 +68,7 @@ resource "null_resource" "apply_schema" {
       type     = "winrm"
       host     = aws_instance.win.public_ip
       user     = "root"
-      password = rsadecrypt(aws_instance.win.password_data, file(var.private_key_path))
+      password = rsadecrypt(file(var.private_key_path))
       https    = false
       insecure = true
       timeout  = "15m"
