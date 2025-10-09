@@ -100,8 +100,3 @@ variable "db_admin_username" {
   type    = string
   default = "adminuser"
 }
-
-variable "db_name" {
-  type    = string
-  default = "StudentDb"
-}
