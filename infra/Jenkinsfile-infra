@@ -31,87 +31,113 @@ pipeline {
     }
 
     stage('Terraform Fmt & Validate') {
-    steps {
-      dir('infra') {
-        bat '''
-          @echo off
-          setlocal
-          terraform --version
-
-          terraform init -reconfigure -upgrade -no-color
-          if errorlevel 1 exit /b %errorlevel%
-
-          echo === Checking Terraform formatting (non-blocking) ===
-          terraform fmt -recursive -diff -no-color
-          rem fmt exits with code 3 if files need reformatting — ignore that
-          if %errorlevel% equ 1 exit /b 1
-          if %errorlevel% gtr 1 echo Warning: Formatting issues detected, continuing...
-
-          terraform validate -no-color
-          if errorlevel 1 exit /b %errorlevel%
-        '''
-      }
-    }
-  }
-
-
-    stage('Terraform Run') {
-      agent { label 'win-dev' }
-      options { ansiColor('xterm'); timestamps() }
-      environment {
-        TF_IN_AUTOMATION = '1'
-        // Optional local plugin cache to speed init:
-        TF_PLUGIN_CACHE_DIR = "${env.WORKSPACE}\\._tfplugincache"
-        PATH = "C:\\binaries\\terraform;${env.PATH}"
-      }
       steps {
-        withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws_secrets_shankar']]) {
-          dir("${env.WORKSPACE}\\infra") {          // << make sure this is your infra root
-            bat '''
-              @echo on
-              setlocal EnableExtensions EnableDelayedExpansion
+        dir('infra') {
+          bat '''
+            @echo off
+            setlocal
+            terraform --version
 
-              rem ----- Inputs from Jenkins parameters -----
-              rem Expect TF_ACTION in [PLAN|APPLY|DESTROY]
-              echo TF_ACTION=%TF_ACTION%
-              echo AWS_REGION=%AWS_REGION%
+            rem Always init before validate
+            terraform init -reconfigure -upgrade -no-color
+            if errorlevel 1 exit /b %errorlevel%
 
-              rem Compose TF var args. Make sure all vars exist or leave them out.
-              set "TF_ARGS=-var=region=%AWS_REGION% -var=instance_type=%INSTANCE_TYPE% -var=key_name=%KEY_NAME% -var=http_cidr=%HTTP_CIDR% -var=rdp_cidr=%RDP_CIDR%"
+            terraform fmt -check -recursive -no-color
+            if errorlevel 1 exit /b %errorlevel%
 
-              rem ----- Init (idempotent) -----
-              terraform init -no-color -input=false
-
-              rem Validate to catch syntax issues early
-              terraform validate -no-color
-
-              rem ----- Branch on action -----
-              IF /I "%TF_ACTION%"=="PLAN" (
-                echo === Terraform PLAN ===
-                terraform plan -no-color -input=false !TF_ARGS! -out=tfplan
-                echo --- Human-readable plan ---
-                terraform show -no-color tfplan
-                exit /b 0
-              ) ELSE IF /I "%TF_ACTION%"=="APPLY" (
-                echo === Terraform APPLY ===
-                terraform apply -no-color -input=false -auto-approve !TF_ARGS!
-                exit /b !ERRORLEVEL!
-              ) ELSE IF /I "%TF_ACTION%"=="DESTROY" (
-                echo === Terraform DESTROY ===
-                terraform destroy -no-color -input=false -auto-approve !TF_ARGS!
-                exit /b !ERRORLEVEL!
-              ) ELSE (
-                echo Invalid TF_ACTION "%TF_ACTION%". Use PLAN, APPLY or DESTROY.
-                exit /b 1
-              )
-            '''
-            // archive the binary plan if you want to download it from Jenkins
-            archiveArtifacts artifacts: 'infra/tfplan', onlyIfSuccessful: true, allowEmptyArchive: true
-          }
+            terraform validate -no-color
+            if errorlevel 1 exit /b %errorlevel%
+          '''
         }
       }
     }
 
+    stage('Plan / Apply / Destroy') {
+      steps {
+        withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws_secrets_shankar']]) {
+          dir('infra') {
+            bat '''
+              @echo off
+              rem ==========================================================
+              rem  Robust action dispatcher for TF_ACTION on Windows batch
+              rem ==========================================================
+              setlocal DisableDelayedExpansion
+
+              rem ---- Secrets via TF_VAR_* (never echo) ----
+              set "TF_VAR_mysql_root_password=%MYSQL_ROOT_PASSWORD%"
+              set "TF_VAR_mysql_app_password=%MYSQL_APP_PASSWORD%"
+              if not defined TF_VAR_mysql_root_password (echo MISSING TF_VAR_mysql_root_password & exit /b 1)
+              if not defined TF_VAR_mysql_app_password  (echo MISSING TF_VAR_mysql_app_password  & exit /b 1)
+
+              rem ---- Non-secret args ----
+              set "TF_ARGS=-var=region=%AWS_REGION% -var=instance_type=%INSTANCE_TYPE% -var=http_cidr=%HTTP_CIDR% -var=rdp_cidr=%RDP_CIDR%"
+              if not "%KEY_NAME%"=="" set "TF_ARGS=%TF_ARGS% -var=key_name=%KEY_NAME%"
+
+              rem ---- Normalize action (strip quotes, upcase) ----
+              set "ACTION=%TF_ACTION%"
+              set "ACTION=%ACTION:"=%"
+              for %%A in (APPLY PLAN DESTROY) do (
+                if /I "%%A"=="%ACTION%" set "ACTION=%%A"
+              )
+
+              echo.
+              echo ===== Selected TF_ACTION: [%ACTION%] =====
+              echo Terraform args: %TF_ARGS%
+              echo.
+
+              rem ---- Always init before any command ----
+              terraform init -reconfigure -upgrade -no-color
+              if errorlevel 1 exit /b %errorlevel%
+
+              if /I "%ACTION%"=="PLAN"    goto :do_plan
+              if /I "%ACTION%"=="APPLY"   goto :do_apply
+              if /I "%ACTION%"=="DESTROY" goto :do_destroy
+
+              echo ERROR: Unknown TF_ACTION "%TF_ACTION%"
+              exit /b 2
+
+              :do_plan
+              echo ==== TF PLAN ====
+              terraform plan %TF_ARGS% -out=plan.tfplan -no-color -input=false
+              if errorlevel 1 exit /b %errorlevel%
+              terraform show -no-color plan.tfplan > plan.txt
+              goto :outputs
+
+              :do_apply
+              echo ==== TF PLAN (for APPLY) ====
+              terraform plan %TF_ARGS% -out=apply.tfplan -no-color -input=false
+              if errorlevel 1 exit /b %errorlevel%
+              echo ==== TF APPLY ====
+              terraform apply -auto-approve -no-color -input=false apply.tfplan
+              if errorlevel 1 exit /b %errorlevel%
+              terraform show -no-color apply.tfplan > apply.txt
+              goto :outputs
+
+              :do_destroy
+              rem You can either do a plan+apply of the destroy plan, or direct destroy.
+              rem Option A: plan + apply (keeps artifacts)
+              echo ==== TF PLAN (DESTROY) ====
+              terraform plan -destroy %TF_ARGS% -out=destroy.tfplan -no-color -input=false
+              if errorlevel 1 exit /b %errorlevel%
+              echo ==== TF APPLY (DESTROY PLAN) ====
+              terraform apply -auto-approve -no-color -input=false destroy.tfplan
+              if errorlevel 1 exit /b %errorlevel%
+              terraform show -no-color destroy.tfplan > destroy.txt
+              goto :outputs
+
+              :outputs
+              echo ==== TF OUTPUTS (json) ====
+              rem Safe to print; avoids sensitive values
+              terraform output -json > tf-outputs.json
+              if errorlevel 1 exit /b %errorlevel%
+              type tf-outputs.json
+
+              exit /b 0
+            '''
+          }
+        }
+      }
+    }
 
 
   }
