@@ -100,3 +100,9 @@ variable "db_admin_username" {
   type    = string
   default = "adminuser"
 }
+
+variable "mysql_db_password" {
+  type        = string
+  description = "MySQL database password"
+  sensitive   = true
+}

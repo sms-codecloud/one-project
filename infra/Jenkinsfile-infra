@@ -13,6 +13,7 @@ pipeline {
     // Prompt every run; Jenkins masks these if printed (we never echo them)
     password(name: 'MYSQL_ROOT_PASSWORD', defaultValue: '1234567890', description: 'MySQL root password')
     password(name: 'MYSQL_APP_PASSWORD',  defaultValue: '1234567890', description: 'MySQL app/user password')
+    password(name: 'MYSQL_DB_PASSWORD',  defaultValue: '1234567890', description: 'MySQL DB password')
   }
 
   environment {
@@ -87,12 +88,14 @@ pipeline {
               rem ---- Secrets via TF_VAR_* (never echo) ----
               set "TF_VAR_mysql_root_password=%MYSQL_ROOT_PASSWORD%"
               set "TF_VAR_mysql_app_password=%MYSQL_APP_PASSWORD%"
+              set "TF_VAR_mysql_db_password=%MYSQL_DB_PASSWORD%"
               if not defined TF_VAR_mysql_root_password (echo MISSING TF_VAR_mysql_root_password & exit /b 1)
               if not defined TF_VAR_mysql_app_password  (echo MISSING TF_VAR_mysql_app_password  & exit /b 1)
+              if not defined TF_VAR_mysql_db_password   (echo MISSING TF_VAR_mysql_db_password   & exit /b 1)
 
               rem ---- Non-secret args ----
-              set "TF_ARGS=-var=region=%AWS_REGION% -var=instance_type=%INSTANCE_TYPE% -var=http_cidr=%HTTP_CIDR% -var=rdp_cidr=%RDP_CIDR%"
-              if not "%KEY_NAME%"=="" set "TF_ARGS=%TF_ARGS% -var=key_name=%KEY_NAME%"
+              set "TF_ARGS=-var=region=%AWS_REGION% -var=instance_type=%INSTANCE_TYPE% -var=http_cidr=%HTTP_CIDR% -var=rdp_cidr=%RDP_CIDR% -var=mysql_db_password=%MYSQL_DB_PASSWORD%"
+              if not "%KEY_NAME%"=="" set "TF_ARGS=%TF_ARGS% -var=key_name=%KEY_NAME%" 
 
               rem ---- Normalize action (strip quotes, upcase) ----
               set "ACTION=%TF_ACTION%"
