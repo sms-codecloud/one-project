@@ -15,6 +15,7 @@ resource "aws_instance" "win" {
   vpc_security_group_ids      = [aws_security_group.one_project.id]
   associate_public_ip_address = true
   iam_instance_profile        = aws_iam_instance_profile.ec2_profile.name
+  get_password_data           = true
 
   # Minimal bootstrap (optional). Keep short to avoid long waits.
   # user_data = templatefile("${path.module}/data/user_data_windows.ps1", {
